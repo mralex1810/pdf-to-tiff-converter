@@ -28,11 +28,85 @@ jobs:
       - name: Create offline portable package
         shell: pwsh
         run: ./scripts/publish-windows.ps1
-      - name: Verify packaged EXE starts
+      - name: Verify extracted portable package without installed shared runtimes
         shell: pwsh
         run: |
-          $process = Start-Process ./artifacts/PdfToTiff-win-x64/PdfToTiff.exe -PassThru
+          $ErrorActionPreference = 'Stop'
+          $diagnostics = Join-Path $PWD 'artifacts/package-diagnostics'
+          New-Item $diagnostics -ItemType Directory -Force | Out-Null
+          $runtimes = @(dotnet --list-runtimes)
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inventory installed .NET runtimes.' }
+          $runtimes | Set-Content (Join-Path $diagnostics 'installed-runtimes-before.txt')
+          dotnet build-server shutdown
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot stop .NET build servers before runtime isolation.' }
+
+          # Exercise exactly the distributed ZIP in a fresh path with spaces and Cyrillic.
+          $unpack = Join-Path $env:RUNNER_TEMP ("Проверка portable с пробелами " + [Guid]::NewGuid().ToString('N'))
+          New-Item $unpack -ItemType Directory | Out-Null
+          $zip = (Resolve-Path ./artifacts/PdfToTiff-win-x64.zip).Path
+          $expectedHash = ((Get-Content "$zip.sha256" -Raw).Trim() -split '\s+')[0]
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expectedHash) { throw 'Package checksum mismatch.' }
+          Expand-Archive -LiteralPath $zip -DestinationPath $unpack
+          $packageRoot = Join-Path $unpack 'PdfToTiff-win-x64'
+          $exe = Join-Path $packageRoot 'PdfToTiff.exe'
+          foreach ($file in @('PdfToTiff.exe', 'PdfToTiff.dll', 'coreclr.dll', 'hostfxr.dll',
+                              'PresentationFramework.dll', 'Запуск с диагностикой.cmd')) {
+            if (-not (Test-Path (Join-Path $packageRoot $file))) { throw "Portable package is missing $file" }
+          }
+          "ZIP: $zip`nExtracted executable: $exe" | Set-Content (Join-Path $diagnostics 'package-path.txt')
+
+          # Hide the shared runtime directories from discovered and standard install roots.
+          # The bundled private runtime in the extracted package remains available.
+          $sharedDirectories = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+          foreach ($line in $runtimes) {
+            if ($line -match '\[(.+)\]$') {
+              $null = $sharedDirectories.Add((Split-Path $Matches[1] -Parent))
+            }
+          }
+          $runtimeRoots = @($env:DOTNET_ROOT, $env:DOTNET_ROOT_X64, $env:DOTNET_ROOT_X86,
+                            (Join-Path $env:ProgramFiles 'dotnet'))
+          if (${env:ProgramFiles(x86)}) { $runtimeRoots += Join-Path ${env:ProgramFiles(x86)} 'dotnet' }
+          foreach ($registryRoot in @('HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions',
+                                     'HKLM:\SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions')) {
+            if (Test-Path $registryRoot) {
+              foreach ($architecture in Get-ChildItem $registryRoot) {
+                $location = (Get-ItemProperty $architecture.PSPath -ErrorAction SilentlyContinue).InstallLocation
+                if ($location) { $runtimeRoots += $location }
+              }
+            }
+          }
+          foreach ($runtimeRoot in $runtimeRoots) {
+            if ($runtimeRoot) { $null = $sharedDirectories.Add((Join-Path $runtimeRoot 'shared')) }
+          }
+          $hidden = @()
+          $process = $null
+          $managedLog = Join-Path $env:LOCALAPPDATA 'PdfToTiff/Logs/startup.log'
+          if (Test-Path $managedLog) { Remove-Item $managedLog -Force }
+          $hostLog = Join-Path $diagnostics 'dotnet-host.log'
+          $isolationLog = Join-Path $diagnostics 'runtime-isolation.txt'
           try {
+            foreach ($shared in $sharedDirectories) {
+              if (-not (Test-Path -LiteralPath $shared)) { continue }
+              $disabled = "$shared.pdf-to-tiff-isolated-$([Guid]::NewGuid().ToString('N'))"
+              try {
+                Move-Item -LiteralPath $shared -Destination $disabled
+                $hidden += [PSCustomObject]@{ Original = $shared; Disabled = $disabled }
+                "Hidden: $shared" | Add-Content $isolationLog
+              }
+              catch {
+                "Isolation unavailable for $shared. Independence from installed .NET is NOT proven. Alternative: run this ZIP in a clean Windows VM without .NET. $($_.Exception.Message)" | Add-Content $isolationLog
+                throw 'Shared runtime isolation failed; package independence remains unproven. Use a clean Windows VM without .NET.'
+              }
+            }
+            if ($hidden.Count -eq 0) { throw 'No shared runtime directories were isolated; independence is unproven.' }
+            foreach ($entry in $hidden) {
+              if (Test-Path -LiteralPath $entry.Original) { throw "Shared runtime directory remains available: $($entry.Original)" }
+            }
+            $process = Start-Process -FilePath $exe -ArgumentList '--diagnostic' -WorkingDirectory $packageRoot -PassThru `
+              -RedirectStandardOutput (Join-Path $diagnostics 'app.stdout.log') `
+              -RedirectStandardError (Join-Path $diagnostics 'app.stderr.log') `
+              -Environment @{ DOTNET_HOST_TRACE = '1'; DOTNET_HOST_TRACEFILE = $hostLog; DOTNET_HOST_TRACE_VERBOSITY = '4';
+                              COREHOST_TRACE = '1'; COREHOST_TRACEFILE = $hostLog; COREHOST_TRACE_VERBOSITY = '4' }
             $ready = $false
             for ($i = 0; $i -lt 60; $i++) {
               Start-Sleep -Milliseconds 500
@@ -44,8 +118,33 @@ jobs:
             $process.CloseMainWindow() | Out-Null
             if (-not $process.WaitForExit(10000)) { throw 'Packaged EXE did not close.' }
             if ($process.ExitCode -ne 0) { throw "Packaged EXE failed: $($process.ExitCode)" }
+            if (-not (Test-Path $managedLog)) { throw 'Managed diagnostic startup.log is missing.' }
+            if (-not (Select-String -Path $managedLog -SimpleMatch 'Window shown' -Quiet)) {
+              throw 'Managed startup log does not confirm Window shown.'
+            }
+            if (-not (Test-Path $hostLog)) { throw '.NET host diagnostic log is missing.' }
+            'PASS: extracted portable EXE opened and closed normally while installed shared runtimes were hidden.' | Add-Content $isolationLog
           }
-          finally { if (-not $process.HasExited) { $process.Kill() } }
+          finally {
+            try {
+              if ($process) {
+                $process.Refresh()
+                if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit(10000) | Out-Null }
+              }
+            }
+            finally {
+              $restoreErrors = @()
+              foreach ($entry in $hidden) {
+                try {
+                  Move-Item -LiteralPath $entry.Disabled -Destination $entry.Original
+                  "Restored: $($entry.Original)" | Add-Content $isolationLog
+                }
+                catch { $restoreErrors += $_.Exception.Message }
+              }
+              if (Test-Path $managedLog) { Copy-Item $managedLog (Join-Path $diagnostics 'startup.log') -Force }
+              if ($restoreErrors.Count) { throw ('Failed to restore shared runtime directories: ' + ($restoreErrors -join '; ')) }
+            }
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -55,4 +154,5 @@ jobs:
             artifacts/PdfToTiff-win-x64.zip.sha256
             artifacts/ui-smoke.png
             artifacts/test-results/
+            artifacts/package-diagnostics/
           if-no-files-found: error

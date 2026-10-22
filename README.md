@@ -11,6 +11,15 @@
 `PdfToTiff-win-x64.zip`. Распакуйте его и запустите `PdfToTiff.exe`.
 Устанавливать .NET не требуется. Инструкция для пользователя включена в
 `DISTRIBUTION.txt`; рядом с ZIP опубликована контрольная сумма SHA-256.
+Начиная с v0.1.1 это папка с EXE и DLL: распакуйте её целиком и сохраняйте файлы
+вместе. Самораспаковка библиотек во временную папку при старте не используется.
+
+Если окно не появляется, запустите **«Запуск с диагностикой.cmd»** из той же
+папки. Он покажет код завершения и откроет `%LOCALAPPDATA%\PdfToTiff\Logs`.
+Для разбора нужны `launcher.log`, `host-startup.log` (если создан) и
+`startup.log` (если приложение успело загрузиться). Журналы не отправляются
+автоматически. Они могут содержать имя пользователя и пути на компьютере.
+При ошибке загрузки интерфейса приложение также показывает сообщение с путём журнала.
 
 По умолчанию: **один TIFF на каждую страницу, 200 DPI, цветной, LZW**.
 Есть переключение на один многостраничный TIFF, 300/600 DPI, оттенки серого,
@@ -41,7 +50,7 @@ pwsh -NoProfile -File ./scripts/publish-windows.ps1
 ```
 
 Команды выполняются из корня репозитория. Скрипт сам восстанавливает зависимости,
-собирает self-contained EXE, добавляет инструкции и лицензии, создаёт ZIP.
+собирает self-contained папку EXE+DLL, добавляет инструкции и лицензии, создаёт ZIP.
 Результат: `artifacts/PdfToTiff-win-x64/PdfToTiff.exe`,
 `artifacts/PdfToTiff-win-x64.zip` и `artifacts/PdfToTiff-win-x64.zip.sha256`.
 Для запуска готового результата достаточно распакованного ZIP.
@@ -55,20 +64,20 @@ Get-Content ./artifacts/PdfToTiff-win-x64.zip.sha256
 
 Для Windows ARM64: `./scripts/publish-windows.ps1 -Runtime win-arm64`.
 ARM64-пакет нужно отдельно проверить на целевом устройстве.
+Опциональная сборка одним EXE: `./scripts/publish-windows.ps1 -SingleFile`.
+Она требует извлечения встроенных нативных библиотек при запуске и не является
+основным распространяемым вариантом.
 
 На macOS можно собрать Windows EXE той же командой .NET:
 
 ```sh
 dotnet publish src/PdfToTiff.App -c Release -r win-x64 --self-contained true \
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
-  -p:EnableCompressionInSingleFile=true -p:DebugType=None \
+  -p:PublishSingleFile=false -p:DebugType=None \
   --disable-build-servers -o artifacts/PdfToTiff-win-x64
 ```
 
-Это создаёт EXE; для распространения также нужны `DISTRIBUTION.txt`,
-`THIRD-PARTY-NOTICES.md`, `licenses/` и лицензии .NET runtime.
-При запуске single-file EXE нативные библиотеки автоматически извлекаются
-в пользовательскую временную папку.
+Это создаёт папку EXE+DLL; для распространения также нужны `DISTRIBUTION.txt`,
+`THIRD-PARTY-NOTICES.md`, диагностический CMD, `licenses/` и лицензии .NET runtime.
 
 ## Проверки
 

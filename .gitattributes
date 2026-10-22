@@ -1,3 +1,4 @@
 * text=auto
 *.pdf binary
 licenses/** -text
+*.cmd text eol=crlf

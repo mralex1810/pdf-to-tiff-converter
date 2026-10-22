@@ -6,6 +6,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>PdfToTiff</AssemblyName>
     <RootNamespace>PdfToTiff.App</RootNamespace>
+    <StartupObject>PdfToTiff.App.Program</StartupObject>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>

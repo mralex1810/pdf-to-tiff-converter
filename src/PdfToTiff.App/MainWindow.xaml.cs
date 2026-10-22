@@ -271,7 +271,7 @@ public partial class MainWindow : Window
             _allowClose = true;
             // A completed await can resume inside the original Closing event.
             // Queue the next close to avoid re-entering Window.Close().
-            Dispatcher.BeginInvoke(new Action(Close));
+            _ = Dispatcher.BeginInvoke(new Action(Close));
         }
     }
 }
