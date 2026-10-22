@@ -76,6 +76,7 @@ internal static class Program
         private readonly Stopwatch _elapsed = new();
         private HashSet<string> _existingFolders = new(StringComparer.OrdinalIgnoreCase);
         private bool _finished;
+        private int _exitCode;
 
         public void Start()
         {
@@ -187,6 +188,7 @@ internal static class Program
         {
             if (_finished)
             {
+                _exitCode = 1;
                 Console.Error.WriteLine("WPF UI SMOKE FAILED DURING SHUTDOWN: " + ex);
                 application.Shutdown(1);
                 return;
@@ -200,6 +202,7 @@ internal static class Program
             if (_finished)
                 return;
             _finished = true;
+            _exitCode = exitCode;
             _poll.Stop();
             try
             {
@@ -219,10 +222,9 @@ internal static class Program
             catch (Exception ex)
             {
                 Console.Error.WriteLine("Screenshot failed: " + ex);
-                exitCode = 1;
+                _exitCode = 1;
             }
 
-            int finalExitCode = exitCode;
             // Normal closure respects MainWindow's cancellation/cleanup handler.
             // A hung native conversion must not keep the smoke-test process alive forever.
             var shutdownGuard = new DispatcherTimer(DispatcherPriority.Send)
@@ -232,7 +234,7 @@ internal static class Program
             shutdownGuard.Tick += (_, _) =>
             {
                 shutdownGuard.Stop();
-                finalExitCode = 1;
+                _exitCode = 1;
                 Console.Error.WriteLine("WPF UI SMOKE FAILED: window did not close within 5 seconds.");
                 application.Shutdown(1);
             };
@@ -240,9 +242,9 @@ internal static class Program
             window.Closed += (_, _) =>
             {
                 shutdownGuard.Stop();
-                if (finalExitCode == 0)
+                if (_exitCode == 0)
                     Console.WriteLine("WPF UI SMOKE PASSED");
-                application.Shutdown(finalExitCode);
+                application.Shutdown(_exitCode);
             };
             shutdownGuard.Start();
             window.Close();

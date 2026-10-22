@@ -1,5 +1,7 @@
 # PDF → TIFF
 
+[![Windows build and conversion](https://github.com/mralex1810/pdf-to-tiff-converter/actions/workflows/windows.yml/badge.svg)](https://github.com/mralex1810/pdf-to-tiff-converter/actions/workflows/windows.yml)
+
 Небольшое нативное приложение Windows 10/11. Конвертация выполняется локально,
 без интернета, сервера и установленного у пользователя .NET.
 
@@ -88,8 +90,9 @@ PDFium той же версии. Проверяются страницы, пов
 Этот сценарий нажимает кнопку конвертации, проверяет два одностраничных TIFF
 встроенным Windows-декодером и сохраняет снимок окна. Workflow
 `.github/workflows/windows.yml` выполняет тесты, упаковывает приложение и
-проверяет запуск готового EXE. Само наличие workflow не означает, что CI уже выполнен.
-Текущие результаты — в `TESTING.md`.
+проверяет запуск готового EXE. Windows CI успешно выполнен 22 октября 2026:
+28 тестов, конвертация через WPF и запуск/закрытие упакованного EXE.
+Результаты и границы проверок — в [TESTING.md](TESTING.md).
 
 Для проверки ядра на приложенном PDF без GUI есть служебный CLI:
 
