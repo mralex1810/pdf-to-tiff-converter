@@ -18,19 +18,30 @@ internal static class Program
             if (!OperatingSystem.IsWindows())
                 throw new PlatformNotSupportedException("The WPF smoke runner requires Windows.");
             var settings = Settings.Parse(args);
-            var application = new SmokeApplication();
+            var application = new global::PdfToTiff.App.App();
             application.InitializeComponent();
             application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            var window = new global::PdfToTiff.App.MainWindow();
-            application.MainWindow = window;
-            var runner = new SmokeRunner(application, window, settings);
+            SmokeRunner? runner = null;
             application.DispatcherUnhandledException += (_, e) =>
             {
                 e.Handled = true;
-                runner.Fail(e.Exception);
+                if (runner is not null)
+                    runner.Fail(e.Exception);
+                else
+                {
+                    Console.Error.WriteLine("WPF UI SMOKE FAILED DURING STARTUP: " + e.Exception);
+                    application.Shutdown(1);
+                }
             };
-            window.Show();
-            application.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(runner.Start));
+            // Let the real App.OnStartup create its normal window. Subclassing App
+            // changes the BAML component type and prevents app.xaml from loading.
+            application.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+            {
+                if (application.MainWindow is not global::PdfToTiff.App.MainWindow window)
+                    throw new InvalidOperationException("The application did not create its main window.");
+                runner = new SmokeRunner(application, window, settings);
+                runner.Start();
+            }));
             return application.Run();
         }
         catch (Exception ex)
@@ -38,13 +49,6 @@ internal static class Program
             Console.Error.WriteLine("WPF UI SMOKE FAILED: " + ex);
             return 1;
         }
-    }
-
-    private sealed class SmokeApplication : global::PdfToTiff.App.App
-    {
-        // The runner creates its own MainWindow after loading the real application
-        // resources. StartupUri cannot be set to null in WPF.
-        protected override void OnStartup(StartupEventArgs e) { }
     }
 
     private sealed record Settings(string? PdfPath, string? OutputRoot, string ScreenshotPath)
