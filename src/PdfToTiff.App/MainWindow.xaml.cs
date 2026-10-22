@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        UpdateColorHint(SelectedEnum<ColorMode>(ColorChoice) == ColorMode.BlackAndWhite);
         OutputPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PDF в TIFF");
     }
 
@@ -96,10 +97,8 @@ public partial class MainWindow : Window
         try
         {
             bool monochrome = SelectedEnum<ColorMode>(ColorChoice) == ColorMode.BlackAndWhite;
-            if (monochrome)
-                CompressionChoice.SelectedIndex = 3;
-            else if (SelectedEnum<TiffCompression>(CompressionChoice) == TiffCompression.Group4)
-                CompressionChoice.SelectedIndex = 0;
+            if (!monochrome && SelectedEnum<TiffCompression>(CompressionChoice) == TiffCompression.Group4)
+                CompressionChoice.SelectedIndex = 4;
             UpdateColorHint(monochrome);
         }
         finally { _updatingOptions = false; }
@@ -124,7 +123,7 @@ public partial class MainWindow : Window
         ThresholdPanel.Visibility = monochrome ? Visibility.Visible : Visibility.Collapsed;
         CompressionHint.Text = SelectedEnum<TiffCompression>(CompressionChoice) == TiffCompression.Group4
             ? "Group 4 использует чёрно-белый режим. При выборе этого сжатия цветность переключается автоматически."
-            : "LZW и Deflate сохраняют все детали выбранного режима. Более высокое DPI увеличивает время и размер файлов.";
+            : "PackBits, LZW и Deflate сохраняют все детали выбранного режима. Более высокое DPI увеличивает время и размер файлов.";
     }
 
     private static T SelectedEnum<T>(ComboBox choice) where T : struct, Enum =>

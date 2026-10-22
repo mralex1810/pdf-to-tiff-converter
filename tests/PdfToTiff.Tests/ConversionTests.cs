@@ -12,10 +12,13 @@ public sealed class ConversionTests : IDisposable
     public ConversionTests() => Directory.CreateDirectory(root);
 
     [Fact]
-    public void DefaultsProduceOneTiffPerPageWithDpiAndCorrectRgbPixels()
+    public void ExplicitColorLzwProducesOneTiffPerPageWithDpiAndCorrectRgbPixels()
     {
         string input = CreateTwoPagePdf();
-        ConversionResult result = Convert(input, new ConversionOptions());
+        ConversionResult result = Convert(input, new ConversionOptions
+        {
+            Dpi = 200, ColorMode = ColorMode.Color, Compression = TiffCompression.Lzw
+        });
 
         Assert.Equal(2, result.PageCount);
         Assert.Equal(2, result.Files.Count);
@@ -50,7 +53,7 @@ public sealed class ConversionTests : IDisposable
     {
         string input = Path.Combine(root, "filled-form.pdf");
         PdfFixture.WriteFilledAcroForm(input);
-        ConversionResult result = Convert(input, new ConversionOptions { Dpi = 72 });
+        ConversionResult result = Convert(input, new ConversionOptions { Dpi = 72, ColorMode = ColorMode.Color });
         using Tiff tiff = Open(Assert.Single(result.Files));
         AssertDimensions(tiff, 72, 72);
         int[] pixels = Decode(tiff);
@@ -64,6 +67,7 @@ public sealed class ConversionTests : IDisposable
     [InlineData(72, 72, 108)]
     [InlineData(144, 144, 216)]
     [InlineData(300, 300, 450)]
+    [InlineData(400, 400, 600)]
     public void DpiControlsRasterDimensionsAndResolutionMetadata(int dpi, int width, int height)
     {
         ConversionResult result = Convert(CreateTwoPagePdf(), new ConversionOptions { Dpi = dpi });
@@ -145,6 +149,7 @@ public sealed class ConversionTests : IDisposable
         ConversionResult result = Convert(CreateTwoPagePdf(), new ConversionOptions
         {
             Dpi = 72,
+            ColorMode = ColorMode.Color,
             OutputMode = OutputMode.MultiPage
         });
         Assert.Equal(2, result.PageCount);
@@ -163,16 +168,76 @@ public sealed class ConversionTests : IDisposable
     [Theory]
     [InlineData(TiffCompression.None)]
     [InlineData(TiffCompression.Deflate)]
+    [InlineData(TiffCompression.PackBits)]
     public void AlternativeCompressionModesRoundTripPixels(TiffCompression compression)
     {
-        ConversionResult result = Convert(CreateTwoPagePdf(), new ConversionOptions { Dpi = 72, Compression = compression });
+        ConversionResult result = Convert(CreateTwoPagePdf(), new ConversionOptions { Dpi = 72, ColorMode = ColorMode.Color, Compression = compression });
         using Tiff tiff = Open(result.Files[0]);
         int tag = Tag(tiff, TiffTag.COMPRESSION);
         if (compression == TiffCompression.None)
             Assert.Equal((int)Compression.NONE, tag);
+        else if (compression == TiffCompression.PackBits)
+            Assert.Equal((int)Compression.PACKBITS, tag);
         else
             Assert.Contains(tag, new[] { (int)Compression.DEFLATE, (int)Compression.ADOBE_DEFLATE });
         AssertRgb(Decode(tiff)[81 * 72 + 18], 255, 0, 0);
+    }
+
+    [Fact]
+    public void DefaultsProduceSeparateOneBitPackBitsTiffsAt400Dpi()
+    {
+        ConversionResult result = Convert(CreateTwoPagePdf(), new ConversionOptions());
+        Assert.Equal(2, result.Files.Count);
+        using Tiff first = Open(result.Files[0]);
+        Assert.Equal(1, first.NumberOfDirectories());
+        AssertDimensions(first, 400, 600);
+        AssertDpi(first, 400);
+        Assert.Equal(1, Tag(first, TiffTag.SAMPLESPERPIXEL));
+        Assert.Equal(1, Tag(first, TiffTag.BITSPERSAMPLE));
+        Assert.Equal((int)Compression.PACKBITS, Tag(first, TiffTag.COMPRESSION));
+        int[] pixels = Decode(first);
+        AssertRgb(pixels[150 * 400 + 100], 0, 0, 0); // Blue becomes black.
+        AssertRgb(pixels[150 * 400 + 300], 255, 255, 255);
+        AssertRgb(pixels[450 * 400 + 100], 0, 0, 0); // Red becomes black.
+        AssertRgb(pixels[450 * 400 + 300], 0, 0, 0); // Green is below threshold 180.
+        using Tiff second = Open(result.Files[1]);
+        Assert.Equal(1, second.NumberOfDirectories());
+        AssertDimensions(second, 400, 800);
+        AssertDpi(second, 400);
+        Assert.Equal(1, Tag(second, TiffTag.BITSPERSAMPLE));
+        Assert.Equal((int)Compression.PACKBITS, Tag(second, TiffTag.COMPRESSION));
+        AssertRgb(Decode(second)[400 * 400 + 200], 255, 255, 255); // Yellow becomes white.
+    }
+
+    [Theory]
+    [InlineData(ColorMode.Color, OutputMode.SeparateFiles)]
+    [InlineData(ColorMode.Color, OutputMode.MultiPage)]
+    [InlineData(ColorMode.Grayscale, OutputMode.SeparateFiles)]
+    [InlineData(ColorMode.Grayscale, OutputMode.MultiPage)]
+    [InlineData(ColorMode.BlackAndWhite, OutputMode.SeparateFiles)]
+    [InlineData(ColorMode.BlackAndWhite, OutputMode.MultiPage)]
+    public void PackBitsExactlyMatchesUncompressedPixelsForEveryColorAndOutputMode(ColorMode color, OutputMode mode)
+    {
+        string input = Path.Combine(root, "bitonal.pdf");
+        PdfFixture.WritePackBitsTwoPages(input); // 73 pixels includes a partial byte in one-bit output.
+        var options = new ConversionOptions { Dpi = 72, ColorMode = color, OutputMode = mode };
+        ConversionResult plain = Convert(input, options with { Compression = TiffCompression.None });
+        ConversionResult packed = Convert(input, options with { Compression = TiffCompression.PackBits });
+        Assert.Equal(mode == OutputMode.MultiPage ? 1 : 2, packed.Files.Count);
+        for (int file = 0; file < packed.Files.Count; file++)
+        {
+            using Tiff expected = Open(plain.Files[file]);
+            using Tiff actual = Open(packed.Files[file]);
+            Assert.Equal(mode == OutputMode.MultiPage ? 2 : 1, actual.NumberOfDirectories());
+            do
+            {
+                Assert.Equal((int)Compression.PACKBITS, Tag(actual, TiffTag.COMPRESSION));
+                Assert.Equal(Decode(expected), Decode(actual));
+                bool more = actual.ReadDirectory();
+                Assert.Equal(more, expected.ReadDirectory());
+                if (!more) break;
+            } while (true);
+        }
     }
 
     [Fact]

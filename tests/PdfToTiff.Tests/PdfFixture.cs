@@ -14,6 +14,10 @@ internal static class PdfFixture
     internal static void WriteBitonal(string path) => Write(path,
         new Page(73, 41, "0 0 0 rg 0 0 36 41 re f\n0.8 0.8 0.8 rg 36 0 37 20 re f\n"));
 
+    internal static void WritePackBitsTwoPages(string path) => Write(path,
+        new Page(73, 41, "0 0 0 rg 0 0 36 41 re f\n0.8 0.8 0.8 rg 36 0 37 20 re f\n"),
+        new Page(144, 72, "1 0 0 rg 0 0 72 72 re f\n0 1 0 rg 72 0 72 72 re f\n", 90));
+
     internal static void WriteOversizedSecondPage(string path) => Write(path,
         new Page(72, 72, "0 0 0 rg 0 0 72 72 re f\n"),
         new Page(5000, 5000, "0 0 0 rg 0 0 5000 5000 re f\n"));

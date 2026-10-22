@@ -83,20 +83,29 @@ internal static class Program
             try
             {
                 AssertTag("OutputChoice", "SeparateFiles");
-                AssertTag("DpiChoice", "200");
-                AssertTag("ColorChoice", "Color");
-                AssertTag("CompressionChoice", "Lzw");
-                Console.WriteLine("PASS: default options are separate TIFF files, 200 DPI, color, LZW.");
+                AssertTag("DpiChoice", "400");
+                AssertTag("ColorChoice", "BlackAndWhite");
+                AssertTag("CompressionChoice", "PackBits");
+                Assert(Control<StackPanel>("ThresholdPanel").Visibility == Visibility.Visible,
+                    "Black-and-white threshold should be visible on startup.");
+                Console.WriteLine("PASS: default options are separate TIFF files, 400 DPI, black-and-white, PackBits.");
+
+                SelectTag("ColorChoice", "Color");
+                AssertTag("CompressionChoice", "PackBits");
+                SelectTag("ColorChoice", "BlackAndWhite");
+                AssertTag("CompressionChoice", "PackBits");
 
                 SelectTag("CompressionChoice", "Group4");
                 AssertTag("ColorChoice", "BlackAndWhite");
                 Assert(Control<StackPanel>("ThresholdPanel").Visibility == Visibility.Visible,
                     "Black-and-white threshold should be visible for Group 4.");
                 SelectTag("ColorChoice", "Color");
-                AssertTag("CompressionChoice", "Lzw");
+                AssertTag("CompressionChoice", "PackBits");
                 Assert(Control<StackPanel>("ThresholdPanel").Visibility == Visibility.Collapsed,
                     "Black-and-white threshold should be hidden for color output.");
-                Console.WriteLine("PASS: Group 4 selects black-and-white; selecting color restores LZW.");
+                SelectTag("ColorChoice", "BlackAndWhite");
+                AssertTag("CompressionChoice", "PackBits");
+                Console.WriteLine("PASS: Group 4 selects black-and-white; selecting color restores PackBits, which persists when returning to black-and-white.");
 
                 if (settings.PdfPath is null)
                 {
@@ -156,8 +165,13 @@ internal static class Program
                 Assert(decoder.Frames.Count == 1, Path.GetFileName(path) + " should contain exactly one page.");
                 BitmapFrame frame = decoder.Frames[0];
                 Assert(frame.PixelWidth > 0 && frame.PixelHeight > 0, Path.GetFileName(path) + " is empty.");
-                Assert(Math.Abs(frame.DpiX - 200) < 1 && Math.Abs(frame.DpiY - 200) < 1,
-                    Path.GetFileName(path) + " should have 200 DPI metadata.");
+                Assert(Math.Abs(frame.DpiX - 400) < 1 && Math.Abs(frame.DpiY - 400) < 1,
+                    Path.GetFileName(path) + " should have 400 DPI metadata.");
+                Assert(frame.Format.BitsPerPixel == 1,
+                    Path.GetFileName(path) + " should contain one-bit black-and-white pixels.");
+                var metadata = frame.Metadata as BitmapMetadata;
+                Assert(Convert.ToInt32(metadata?.GetQuery("/ifd/{ushort=259}")) == 32773,
+                    Path.GetFileName(path) + " should use PackBits compression.");
                 Console.WriteLine($"PASS: {Path.GetFileName(path)} — 1 page, {frame.PixelWidth} × {frame.PixelHeight}, {frame.DpiX:0.##} DPI.");
             }
         }

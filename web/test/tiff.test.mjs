@@ -40,7 +40,7 @@ function directories(bytes) {
 test('writes TIFF metadata, page chain, strip tables, and rational DPI', () => {
   const first = page(1654, 40, () => [0, 0, 0, 255]);
   const second = page(13, 9, () => [255, 255, 255, 255]);
-  const encoded = encodeTiff([first, second], { dpi: 300 });
+  const encoded = encodeTiff([first, second], { dpi: 300, colorMode: 'color', compression: 'lzw' });
   assert.deepEqual([...encoded.slice(0, 4)], [73, 73, 42, 0]);
   const [a, b] = directories(encoded);
   assert.deepEqual(a[256], [1654]);
@@ -55,6 +55,48 @@ test('writes TIFF metadata, page chain, strip tables, and rational DPI', () => {
   assert.ok(a[273].length > 1);
   assert.equal(a[273].length, a[279].length);
   assert.ok(encoded.length < 3000, 'LZW must compress repeated pixels');
+});
+
+test('defaults to 400 DPI, one-bit black and white, and PackBits', () => {
+  const encoded = encodeTiff([page(13, 2, (x, y) => x === y ? [0, 0, 0, 255] : [255, 255, 255, 255])]);
+  const [tags] = directories(encoded);
+  assert.deepEqual(tags[258], [1]);
+  assert.deepEqual(tags[259], [32773]);
+  assert.deepEqual(tags[262], [0]);
+  assert.deepEqual(tags[282], [400, 1]);
+  assert.deepEqual(tags[283], [400, 1]);
+});
+
+test('PackBits handles 127/128/129 boundaries without packets crossing scanlines', () => {
+  for (const width of [1, 2, 3, 127, 128, 129, 255, 256, 257]) {
+    const input = page(width, 5, (x, y) => {
+      const value = y === 0 ? 73 : y === 1 ? x % 251 : y === 2 ? (x < 128 ? 17 : 29) : y === 3 ? Math.floor(x / 2) % 251 : (x % 131 < 128 ? 41 : x % 251);
+      return [value, value, value, 255];
+    });
+    const encoded = encodeTiff([input], { colorMode: 'grayscale', compression: 'packbits' });
+    const [tags] = directories(encoded);
+    assert.deepEqual(tags[259], [32773]);
+    const bytes = encoded.slice(tags[273][0], tags[273][0] + tags[279][0]);
+    let position = 0;
+    for (let row = 0; row < input.height; row++) {
+      const decoded = [];
+      while (decoded.length < width) {
+        const header = bytes[position++];
+        assert.notEqual(header, 128, 'encoder does not need no-op packets');
+        const length = header < 128 ? header + 1 : 257 - header;
+        assert.ok(decoded.length + length <= width, 'PackBits packet must remain within its scanline');
+        if (header < 128) {
+          for (let i = 0; i < length; i++) decoded.push(bytes[position++]);
+        } else {
+          const value = bytes[position++];
+          for (let i = 0; i < length; i++) decoded.push(value);
+        }
+      }
+      const expected = Array.from({ length: width }, (_, x) => input.data[(row * width + x) * 4]);
+      assert.deepEqual(decoded, expected);
+    }
+    assert.equal(position, bytes.length);
+  }
 });
 
 test('bitonal packs odd-width rows MSB-first with white padding', () => {
@@ -86,7 +128,7 @@ test('rejects invalid inputs instead of writing a misleading TIFF', () => {
 const pythonCandidates = [process.env.TIFF_TEST_PYTHON, 'python3', 'python'].filter(Boolean);
 const python = pythonCandidates.find(command => spawnSync(command, ['-c', 'from PIL import Image'], { encoding: 'utf8' }).status === 0);
 
-test('independent Pillow/libtiff decode matches every pixel for LZW/None, modes, strips, and multiple pages', { skip: python ? false : 'Install Python Pillow or set TIFF_TEST_PYTHON to enable independent decoding' }, () => {
+test('independent Pillow/libtiff decode matches every pixel for LZW/None/PackBits, modes, strips, and multiple pages', { skip: python ? false : 'Install Python Pillow or set TIFF_TEST_PYTHON to enable independent decoding' }, () => {
   const directory = mkdtempSync(join(tmpdir(), 'browser-tiff-test-'));
   try {
     let random = 0x12345678;
@@ -101,7 +143,7 @@ test('independent Pillow/libtiff decode matches every pixel for LZW/None, modes,
     const odd = page(13, 71, (x, y) => [(x * 19 + y * 7) & 255, (x * 31 + y * 17) & 255, (x * 11 + y * 23) & 255, 255]);
     const manifest = [];
     for (const colorMode of ['color', 'grayscale', 'bitonal']) {
-      for (const compression of ['lzw', 'none']) {
+      for (const compression of ['lzw', 'none', 'packbits']) {
         const name = `${colorMode}-${compression}`;
         const pages = [noisy, odd];
         if (colorMode === 'grayscale' && compression === 'lzw') {
@@ -115,6 +157,20 @@ test('independent Pillow/libtiff decode matches every pixel for LZW/None, modes,
               }));
             }
           }
+        }
+        if (compression === 'packbits') {
+          // Exercise literal and repeated packets at their 128-byte limit,
+          // including odd-width bitonal rows and multiple 64 KiB strips.
+          for (const width of [1, 2, 3, 127, 128, 129, 255, 256, 257, 1015, 1023, 1031]) {
+            pages.push(page(width, 5, (x, y) => {
+              const value = y === 0 ? 0 : y === 1 ? 255 : y === 2 ? next() : y === 3 ? (x < 128 ? 17 : 229) : (x % 3 ? 255 : 0);
+              return [value, value, value, 255];
+            }));
+          }
+          pages.push(page(1031, 515, (x, y) => {
+            const value = ((x * 31 + y * 19) & 255);
+            return [value, value, value, 255];
+          }));
         }
         writeFileSync(join(directory, `${name}.tiff`), encodeTiff(pages, { colorMode, compression, dpi: 200, threshold: 180 }));
         const expected = pages.map((input, index) => {
@@ -132,7 +188,7 @@ test('independent Pillow/libtiff decode matches every pixel for LZW/None, modes,
           writeFileSync(join(directory, path), data);
           return { path, width: input.width, height: input.height };
         });
-        manifest.push({ path: `${name}.tiff`, mode: colorMode === 'color' ? 'RGB' : 'L', pages: expected });
+        manifest.push({ path: `${name}.tiff`, compression: { lzw: 5, none: 1, packbits: 32773 }[compression], mode: colorMode === 'color' ? 'RGB' : 'L', pages: expected });
       }
     }
     writeFileSync(join(directory, 'manifest.json'), JSON.stringify(manifest));
@@ -147,6 +203,7 @@ for case in manifest:
     assert tuple(image.info['dpi']) == (200, 200), image.info
     for index, page in enumerate(case['pages']):
         image.seek(index)
+        assert image.tag_v2[259] == case['compression'], case['path']
         assert image.size == (page['width'], page['height'])
         actual = image.convert(case['mode']).tobytes()
         expected = open(os.path.join(root, page['path']), 'rb').read()

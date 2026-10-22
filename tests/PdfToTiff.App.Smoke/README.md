@@ -1,6 +1,6 @@
 # WPF UI smoke runner
 
-This Windows-only STA console runner opens the actual WPF application and checks its named controls. It verifies the defaults and the Group 4/color interaction. With a two-page PDF fixture, it clicks the real Convert button, pumps the WPF dispatcher, waits up to 60 seconds, and checks that a new output subfolder contains two independently decodable single-page TIFFs at 200 DPI. A PNG screenshot is saved after layout.
+This Windows-only STA console runner opens the actual WPF application and checks its named controls. It verifies the defaults (black-and-white, 400 DPI, PackBits, separate files), the Group 4/color interaction, and that selecting black-and-white preserves PackBits. With a two-page PDF fixture, it clicks the real Convert button, pumps the WPF dispatcher, waits up to 60 seconds, and checks that a new output subfolder contains two independently decodable one-bit, PackBits-compressed single-page TIFFs at 400 DPI. A PNG screenshot is saved after layout.
 
 Run on Windows 10/11 with the .NET 10 SDK:
 

@@ -178,9 +178,11 @@ try {
   }
 
   await test('defaults-and-separate-tiffs', async () => {
-    assert.equal(await page.locator('#dpi').inputValue(), '200');
-    assert.equal(await page.locator('#color-mode').inputValue(), 'color');
-    assert.equal(await page.locator('#compression').inputValue(), 'lzw');
+    assert.equal(await page.locator('#dpi').inputValue(), '400');
+    assert.equal(await page.locator('#color-mode').inputValue(), 'bw');
+    assert.equal(await page.locator('#compression').inputValue(), 'packbits');
+    assert.ok(await page.locator('#threshold').isVisible());
+    assert.ok(await page.locator('#threshold').isEnabled());
     assert.equal(await page.locator('#output-mode').inputValue(), 'separate');
     assert.ok(await page.locator('#convert').isDisabled());
     await selectPdf(path.join(repo, 'tests/fixtures/two-pages.pdf'));
@@ -190,8 +192,15 @@ try {
     for (let index = 0; index < names.length; index++) {
       const directories = tiffDirectories(files[names[index]]);
       assert.equal(directories.length, 1, 'each downloaded TIFF is single-page');
-      checkTags(directories[0], { width: 400, height: 600, bits: 8, samples: 3, compression: 5, dpi: 200, photometric: 2 });
+      checkTags(directories[0], { width: 800, height: 1200, bits: 1, samples: 1, compression: 32773, dpi: 400, photometric: 0 });
     }
+  });
+
+  await test('multipage-bitonal-400dpi-packbits', async () => {
+    await settings({ dpi: '400', color: 'bw', compression: 'packbits', outputMode: 'multi' });
+    const directories = tiffDirectories(await convertAndSave('multipage-packbits'));
+    assert.equal(directories.length, 2);
+    for (const tags of directories) checkTags(tags, { width: 800, height: 1200, bits: 1, samples: 1, compression: 32773, dpi: 400, photometric: 0 });
   });
 
   await test('multipage-grayscale-300dpi-uncompressed', async () => {
@@ -360,15 +369,16 @@ try {
 
   if (process.env.PDF_TO_TIFF_SAMPLE) await test('user-sample-offline', async () => {
     await selectPdf(path.resolve(process.env.PDF_TO_TIFF_SAMPLE));
-    await settings();
+    await settings({ dpi: '400', color: 'bw', compression: 'packbits' });
     const files = unzipSync(await convertAndSave('sample'));
     assert.ok(Object.keys(files).length > 0);
     report.samplePages = Object.values(files).map(bytes => {
       const directories = tiffDirectories(bytes);
       assert.equal(directories.length, 1);
       const tags = directories[0];
-      assert.deepEqual(tags[259], [5]);
-      assert.deepEqual(tags[282], [200, 1]);
+      assert.deepEqual(tags[259], [32773]);
+      assert.deepEqual(tags[258], [1]);
+      assert.deepEqual(tags[282], [400, 1]);
       return { width: tags[256][0], height: tags[257][0], bytes: bytes.byteLength };
     });
   });

@@ -46,15 +46,16 @@
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                         <StackPanel>
                             <Label Content="_Разрешение" Target="{Binding ElementName=DpiChoice}" />
-                            <ComboBox x:Name="DpiChoice" SelectedIndex="0" AutomationProperties.Name="Разрешение в DPI">
+                            <ComboBox x:Name="DpiChoice" SelectedIndex="2" AutomationProperties.Name="Разрешение в DPI">
                                 <ComboBoxItem Content="200 DPI — как в образце" Tag="200" />
                                 <ComboBoxItem Content="300 DPI" Tag="300" />
+                                <ComboBoxItem Content="400 DPI" Tag="400" />
                                 <ComboBoxItem Content="600 DPI" Tag="600" />
                             </ComboBox>
                         </StackPanel>
                         <StackPanel Grid.Column="2">
                             <Label Content="_Цветность" Target="{Binding ElementName=ColorChoice}" />
-                            <ComboBox x:Name="ColorChoice" SelectedIndex="0" SelectionChanged="ColorChoice_SelectionChanged" AutomationProperties.Name="Цветность">
+                            <ComboBox x:Name="ColorChoice" SelectedIndex="2" SelectionChanged="ColorChoice_SelectionChanged" AutomationProperties.Name="Цветность">
                                 <ComboBoxItem Content="Цветной" Tag="Color" />
                                 <ComboBoxItem Content="Оттенки серого" Tag="Grayscale" />
                                 <ComboBoxItem Content="Чёрно-белый (1 бит)" Tag="BlackAndWhite" />
@@ -72,15 +73,16 @@
                         </StackPanel>
                         <StackPanel Grid.Column="2">
                             <Label Content="С_жатие" Target="{Binding ElementName=CompressionChoice}" />
-                            <ComboBox x:Name="CompressionChoice" SelectedIndex="0" SelectionChanged="CompressionChoice_SelectionChanged" AutomationProperties.Name="Сжатие TIFF">
+                            <ComboBox x:Name="CompressionChoice" SelectedIndex="4" SelectionChanged="CompressionChoice_SelectionChanged" AutomationProperties.Name="Сжатие TIFF">
                                 <ComboBoxItem Content="LZW" Tag="Lzw" />
                                 <ComboBoxItem Content="Deflate (ZIP)" Tag="Deflate" />
                                 <ComboBoxItem Content="Без сжатия" Tag="None" />
                                 <ComboBoxItem Content="CCITT Group 4 — только чёрно-белый" Tag="Group4" />
+                                <ComboBoxItem Content="PackBits" Tag="PackBits" />
                             </ComboBox>
                         </StackPanel>
                     </Grid>
-                    <TextBlock x:Name="CompressionHint" Text="LZW сохраняет все детали изображения. Более высокое DPI увеличивает время и размер файлов." Foreground="{StaticResource Muted}" FontSize="12" Margin="0,12,0,0" />
+                    <TextBlock x:Name="CompressionHint" Text="PackBits сохраняет все детали выбранного режима. Более высокое DPI увеличивает время и размер файлов." Foreground="{StaticResource Muted}" FontSize="12" Margin="0,12,0,0" />
                     <StackPanel x:Name="ThresholdPanel" Visibility="Collapsed" Margin="0,16,0,0">
                         <Label Content="Порог чёрно-белого: больше значение — темнее результат" Target="{Binding ElementName=ThresholdSlider}" />
                         <Grid>

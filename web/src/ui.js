@@ -46,17 +46,17 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
           <div class="field-row">
             <div class="field">
               <label for="dpi">Разрешение</label>
-              <select id="dpi"><option value="200">200 DPI · стандартное</option><option value="300">300 DPI · высокое</option><option value="600">600 DPI · максимальное</option></select>
+              <select id="dpi"><option value="200">200 DPI</option><option value="300">300 DPI</option><option value="400" selected>400 DPI · стандартное</option><option value="600">600 DPI · максимальное</option></select>
             </div>
             <div class="field">
               <label for="color-mode">Цветность</label>
-              <select id="color-mode"><option value="color">Цветной</option><option value="grayscale">Оттенки серого</option><option value="bw">Чёрно-белый · 1 бит</option></select>
+              <select id="color-mode"><option value="color">Цветной</option><option value="grayscale">Оттенки серого</option><option value="bw" selected>Чёрно-белый · 1 бит</option></select>
             </div>
           </div>
           <div class="field-row">
             <div class="field">
               <label for="compression">Сжатие</label>
-              <select id="compression"><option value="lzw">LZW · без потери качества</option><option value="none">Без сжатия</option></select>
+              <select id="compression"><option value="packbits" selected>PackBits · без потери качества</option><option value="lzw">LZW · без потери качества</option><option value="none">Без сжатия</option></select>
             </div>
             <div id="threshold-field" class="field" hidden>
               <label for="threshold">Порог чёрного: <output id="threshold-value" for="threshold">180</output></label>
@@ -82,7 +82,7 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
 
       <footer class="notes">
         <p><svg viewBox="0 0 16 18" fill="none" aria-hidden="true"><rect x="2" y="7" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M5 7V4a3 3 0 0 1 6 0v3" stroke="currentColor" stroke-width="1.5"/></svg> Документы обрабатываются в этом браузере и никуда не отправляются.</p>
-        <details><summary>Ограничения браузерной версии</summary><p>Подходит для небольших документов. PDF до 128 МиБ. До 80 млн пикселей на страницу и до 256 МиБ растровых данных на документ; при высоком DPI лимит достигается быстрее. При нехватке памяти уменьшите DPI или разделите PDF. PDF с паролем не поддерживаются. Во время обработки держите вкладку открытой.</p><p>Сжатие LZW сохраняет изображение без потерь. Вариант «Без сжатия» создаёт заметно большие файлы. Сжатие CCITT Group 4 доступно в приложении для Windows.</p></details>
+        <details><summary>Ограничения браузерной версии</summary><p>Подходит для небольших документов. PDF до 128 МиБ. До 80 млн пикселей на страницу и до 256 МиБ растровых данных на документ; при высоком DPI лимит достигается быстрее. При нехватке памяти уменьшите DPI или разделите PDF. PDF с паролем не поддерживаются. Во время обработки держите вкладку открытой.</p><p>PackBits и LZW сохраняют изображение без потерь. Вариант «Без сжатия» создаёт заметно большие файлы. Сжатие CCITT Group 4 доступно в приложении для Windows.</p></details>
       </footer>
     </main>`;
 
@@ -181,13 +181,14 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
     get('output-hint').textContent = get('output-mode').value === 'separate'
       ? 'Все страницы сохранятся в одном ZIP-архиве.' : 'Все страницы сохранятся внутри одного файла TIFF.';
   });
-  get('color-mode').addEventListener('change', () => {
+  function updateColorControls() {
     const bw = get('color-mode').value === 'bw';
     get('threshold-field').hidden = !bw;
     get('threshold').disabled = !bw;
     get('bw-hint').hidden = !bw;
-  });
-  get('threshold').disabled = true;
+  }
+  get('color-mode').addEventListener('change', updateColorControls);
+  updateColorControls();
   get('threshold').addEventListener('input', () => { get('threshold-value').value = get('threshold').value; });
   cancel.addEventListener('click', () => {
     cancelled = true;

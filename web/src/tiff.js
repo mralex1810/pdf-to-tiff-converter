@@ -1,4 +1,5 @@
-// A small classic TIFF writer. Each strip has its own TIFF LZW dictionary.
+// A small classic TIFF writer. Each strip has its own TIFF LZW dictionary;
+// PackBits packets are bounded by scanlines as required by TIFF.
 // No browser APIs are used, so the same encoder is exercised by the Node tests.
 const TIFF_LIMIT = 0xffffffff;
 const STRIP_BYTES = 64 * 1024;
@@ -63,6 +64,32 @@ function whiteComposite(channel, alpha) {
   return alpha === 255 ? channel : Math.floor((channel * alpha + 255 * (255 - alpha) + 127) / 255);
 }
 
+function tiffPackBits(input, rowBytes) {
+  const bytes = [];
+  for (let row = 0; row < input.length; row += rowBytes) {
+    const end = row + rowBytes;
+    let position = row;
+    function runLength(at) {
+      let count = 1;
+      while (at + count < end && count < 128 && input[at + count] === input[at]) count++;
+      return count;
+    }
+    while (position < end) {
+      const repeated = runLength(position);
+      if (repeated >= 3) {
+        bytes.push(257 - repeated, input[position]);
+        position += repeated;
+      } else {
+        const start = position++;
+        while (position < end && position - start < 128 && runLength(position) < 3) position++;
+        bytes.push(position - start - 1);
+        for (let i = start; i < position; i++) bytes.push(input[i]);
+      }
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+
 function encodeStrip(page, firstRow, rows, mode, threshold, rowBytes) {
   const output = new Uint8Array(rowBytes * rows);
   let destination = 0;
@@ -96,14 +123,14 @@ function encodeStrip(page, firstRow, rows, mode, threshold, rowBytes) {
  * @param {{dpi?:number,colorMode?:string,compression?:string,threshold?:number}} options
  * @returns {Uint8Array}
  */
-export function encodeTiff(pages, { dpi = 200, colorMode = 'color', compression = 'lzw', threshold = 180 } = {}) {
+export function encodeTiff(pages, { dpi = 400, colorMode = 'bw', compression = 'packbits', threshold = 180 } = {}) {
   if (!Array.isArray(pages) || pages.length === 0) throw new TypeError('At least one page is required');
   integer(pages.length, 'Page count', 1, 65535);
   integer(dpi, 'DPI', 1, 65535);
   integer(threshold, 'Threshold', 0, 255);
   if (['black-and-white', 'bw', 'blackWhite', 'blackAndWhite'].includes(colorMode)) colorMode = 'bitonal';
   if (!['color', 'grayscale', 'bitonal'].includes(colorMode)) throw new RangeError('Unknown color mode');
-  if (!['lzw', 'none'].includes(compression)) throw new RangeError('Unknown TIFF compression');
+  if (!['lzw', 'none', 'packbits'].includes(compression)) throw new RangeError('Unknown TIFF compression');
 
   const channels = colorMode === 'color' ? 3 : 1;
   const bits = colorMode === 'bitonal' ? 1 : 8;
@@ -118,13 +145,13 @@ export function encodeTiff(pages, { dpi = 200, colorMode = 'color', compression 
     const strips = [];
     for (let row = 0; row < page.height; row += rowsPerStrip) {
       const raw = encodeStrip(page, row, Math.min(rowsPerStrip, page.height - row), colorMode, threshold, rowBytes);
-      strips.push(compression === 'lzw' ? tiffLzw(raw) : raw);
+      strips.push(compression === 'lzw' ? tiffLzw(raw) : compression === 'packbits' ? tiffPackBits(raw, rowBytes) : raw);
     }
     const stripOffsets = new Array(strips.length).fill(0);
     const entries = [
       [256, 4, [page.width]], [257, 4, [page.height]],
       [258, 3, new Array(channels).fill(bits)],
-      [259, 3, [compression === 'lzw' ? 5 : 1]],
+      [259, 3, [compression === 'lzw' ? 5 : compression === 'packbits' ? 32773 : 1]],
       [262, 3, [colorMode === 'color' ? 2 : colorMode === 'grayscale' ? 1 : 0]],
       [273, 4, stripOffsets], [274, 3, [1]], [277, 3, [channels]],
       [278, 4, [rowsPerStrip]], [279, 4, strips.map(strip => strip.length)],

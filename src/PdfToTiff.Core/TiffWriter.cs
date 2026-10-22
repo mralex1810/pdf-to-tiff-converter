@@ -36,6 +36,7 @@ internal sealed class TiffWriter : IDisposable
             TiffCompression.Lzw => Compression.LZW,
             TiffCompression.Deflate => Compression.ADOBE_DEFLATE,
             TiffCompression.Group4 => Compression.CCITTFAX4,
+            TiffCompression.PackBits => Compression.PACKBITS,
             _ => Compression.NONE
         });
         if (!monochrome && options.Compression is TiffCompression.Lzw or TiffCompression.Deflate)
