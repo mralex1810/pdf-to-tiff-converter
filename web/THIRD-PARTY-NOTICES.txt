@@ -1,0 +1,16 @@
+Offline PDF to TIFF browser version
+
+PDF.js / pdfjs-dist 6.4.299 — Mozilla Foundation and contributors, Apache-2.0.
+https://github.com/mozilla/pdf.js
+The build embeds PDF.js and its fonts, character maps, image codecs and ICC profile.
+Two PDF.js resource readers and fallback module URL creation are changed at build
+ time to read embedded bytes instead of fetching files. See scripts/build.mjs.
+Bundled codec, font and ICC notices are included in the licenses folder and HTML.
+PDF JavaScript is not executed; the QuickJS scripting runtime is excluded.
+
+fflate 0.8.3 — Arjun Barrett, MIT.
+https://github.com/101arrowz/fflate
+Used to create ZIP files locally.
+
+TIFF encoder and application UI are part of this repository.
+Build/test tools (esbuild, Playwright) are not shipped as application runtimes.

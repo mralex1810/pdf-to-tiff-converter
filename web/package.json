@@ -1,0 +1,22 @@
+{
+  "name": "pdf-to-tiff-offline-html",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node test/browser.mjs"
+  },
+  "dependencies": {
+    "fflate": "0.8.3",
+    "pdfjs-dist": "6.4.299"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright": "1.64.1"
+  }
+}

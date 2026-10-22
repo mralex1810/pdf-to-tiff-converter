@@ -7,3 +7,4 @@ TestResults/
 .DS_Store
 .vs/
 .trigger-tree/
+web/node_modules/

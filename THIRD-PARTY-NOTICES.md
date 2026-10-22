@@ -15,3 +15,9 @@ The portable application contains:
 
 Development-only dependencies (xUnit, Microsoft.NET.Test.Sdk, macOS/Linux PDFium)
 are not included in the Windows application.
+
+## Автономная HTML-версия
+
+PDF.js 6.4.299 (Apache-2.0) с его шрифтами, CMaps, WASM-кодеками и ICC-профилем;
+fflate 0.8.3 (MIT). Полный перечень — в `web/THIRD-PARTY-NOTICES.txt`.
+Сборка включает лицензии в ZIP и непосредственно в HTML.

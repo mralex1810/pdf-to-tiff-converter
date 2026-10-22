@@ -22,6 +22,24 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '10.0.x'
+      - name: Build and test offline HTML in Microsoft Edge
+        shell: pwsh
+        env:
+          PDF_TO_TIFF_BROWSER: msedge
+        run: |
+          node --version
+          npm ci --prefix web --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
+          python -m pip install -r web/test/requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pillow installation failed' }
+          python -c "from PIL import Image; assert Image.core.libtiff_version"
+          if ($LASTEXITCODE -ne 0) { throw 'Independent TIFF decoder is unavailable' }
+          npm --prefix web test
+          if ($LASTEXITCODE -ne 0) { throw 'TIFF tests failed' }
+          npm --prefix web run build
+          if ($LASTEXITCODE -ne 0) { throw 'HTML build failed' }
+          npm --prefix web run test:browser
+          if ($LASTEXITCODE -ne 0) { throw 'Offline Edge conversion failed' }
       - name: Core tests and real WPF UI conversion
         shell: pwsh
         run: ./scripts/test-windows.ps1
@@ -150,6 +168,8 @@ jobs:
         with:
           name: windows-results
           path: |
+            artifacts/html/
+            artifacts/html-tests/
             artifacts/PdfToTiff-win-x64.zip
             artifacts/PdfToTiff-win-x64.zip.sha256
             artifacts/ui-smoke.png
