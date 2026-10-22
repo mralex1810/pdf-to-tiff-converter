@@ -76,6 +76,7 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
           <p id="status" role="status" aria-live="polite"></p>
           <progress id="progress" max="100" value="0" aria-label="Ход конвертации" hidden></progress>
           <a id="download" class="button primary download" hidden>Скачать результат</a>
+          <p id="result-created" class="hint" hidden>Результат создан: <time id="result-created-time"></time></p>
           <p id="download-hint" class="hint" hidden>Файл уже готов. Нажмите кнопку, чтобы сохранить его на компьютер.</p>
         </section>
       </section>
@@ -105,6 +106,9 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
     resultUrl = null;
     download.removeAttribute('href');
     download.hidden = true;
+    get('result-created').hidden = true;
+    get('result-created-time').textContent = '';
+    get('result-created-time').removeAttribute('datetime');
     get('download-hint').hidden = true;
   }
 
@@ -248,6 +252,13 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
       download.href = resultUrl;
       download.download = separate ? `${base}_tiff.zip` : `${base}.tiff`;
       download.textContent = separate ? 'Скачать ZIP с TIFF' : 'Скачать TIFF';
+      const createdAt = new Date();
+      get('result-created-time').dateTime = createdAt.toISOString();
+      get('result-created-time').textContent = createdAt.toLocaleString('ru-RU', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      });
+      get('result-created').hidden = false;
       download.hidden = false;
       get('download-hint').hidden = false;
       progress.value = 100;

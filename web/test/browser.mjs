@@ -152,6 +152,8 @@ try {
   async function selectPdf(file) {
     await page.locator('#pdf-file').setInputFiles(file);
     await page.waitForFunction(() => !document.getElementById('convert').disabled);
+    assert.ok(await page.locator('#result-created').isHidden());
+    assert.equal(await page.locator('#result-created-time').getAttribute('datetime'), null);
   }
   async function settings({ dpi = '200', color = 'color', compression = 'lzw', outputMode = 'separate' } = {}) {
     await page.locator('#dpi').selectOption(dpi);
@@ -166,12 +168,17 @@ try {
     await page.waitForFunction(() => !document.getElementById('convert').disabled);
     assert.equal(downloadEvents, before, 'saving must require the explicit download button');
     assert.match(await page.locator('#status').textContent(), /^Готово\./);
+    assert.ok(await page.locator('#result-created').isVisible());
+    const createdAt = await page.locator('#result-created-time').getAttribute('datetime');
+    assert.ok(Number.isFinite(Date.parse(createdAt)), 'ready result has a creation timestamp');
+    assert.match(await page.locator('#result-created-time').textContent(), /\d{2}\.\d{2}\.\d{4}.*\d{2}:\d{2}:\d{2}/);
     const pending = page.waitForEvent('download');
     await page.locator('#download').click();
     const download = await pending;
     assert.equal(await download.failure(), null);
     const destination = path.join(output, `${label}-${download.suggestedFilename()}`);
     await download.saveAs(destination);
+    assert.equal(await page.locator('#result-created-time').getAttribute('datetime'), createdAt, 'downloading does not change creation time');
     const bytes = new Uint8Array(await readFile(destination));
     report.downloads.push({ test: phase, path: path.relative(repo, destination), name: download.suggestedFilename(), bytes: bytes.byteLength });
     return bytes;
@@ -193,6 +200,29 @@ try {
       const directories = tiffDirectories(files[names[index]]);
       assert.equal(directories.length, 1, 'each downloaded TIFF is single-page');
       checkTags(directories[0], { width: 800, height: 1200, bits: 1, samples: 1, compression: 32773, dpi: 400, photometric: 0 });
+    }
+  });
+
+  await test('timestamp-belongs-to-the-generated-download', async () => {
+    const time = page.locator('#result-created-time');
+    const createdAt = await time.getAttribute('datetime');
+    const originalText = await time.textContent();
+    const originalFile = path.join(repo, report.downloads.at(-1).path);
+    const later = new Date(Date.parse(createdAt) + 120_000);
+    await page.clock.setFixedTime(later);
+    try {
+      await settings({ dpi: '300' });
+      const pending = page.waitForEvent('download');
+      await page.locator('#download').click();
+      const repeated = await pending;
+      assert.equal(await repeated.failure(), null);
+      assert.deepEqual(await readFile(await repeated.path()), await readFile(originalFile), 'repeated download still contains the previous result');
+      assert.equal(await time.getAttribute('datetime'), createdAt);
+      assert.equal(await time.textContent(), originalText, 'elapsed time and changed settings do not relabel the old result');
+      await convertAndSave('new-generation');
+      assert.equal(await time.getAttribute('datetime'), later.toISOString(), 'successful conversion records the new generation time');
+    } finally {
+      await page.clock.setFixedTime(new Date());
     }
   });
 
@@ -362,6 +392,7 @@ try {
     await page.waitForFunction(() => !document.getElementById('convert').disabled);
     assert.match(await page.locator('#status').textContent(), /^Конвертация отменена/);
     assert.ok(await page.locator('#download').isHidden());
+    assert.ok(await page.locator('#result-created').isHidden());
     await selectPdf(path.join(repo, 'tests/fixtures/two-pages.pdf'));
     await settings();
     assert.equal(Object.keys(unzipSync(await convertAndSave('recovery'))).length, 2);
