@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+.tools/
+.nuget/
+artifacts/
+TestResults/
+.DS_Store
+.vs/
+.trigger-tree/

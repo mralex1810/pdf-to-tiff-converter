@@ -1,0 +1,113 @@
+<Window x:Class="PdfToTiff.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PDF → TIFF" Width="800" Height="850" MinWidth="680" MinHeight="650"
+        WindowStartupLocation="CenterScreen" Background="#F3F6FB"
+        FontFamily="Segoe UI" FontSize="14" Foreground="{StaticResource Ink}"
+        AllowDrop="True" PreviewDragOver="Window_DragOver" Drop="Window_Drop"
+        Closing="Window_Closing">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid Margin="30,26">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <StackPanel Margin="0,0,0,24">
+                <TextBlock Text="PDF → TIFF" FontSize="30" FontWeight="SemiBold" />
+                <TextBlock Text="Конвертация на вашем компьютере · без интернета" Foreground="{StaticResource Muted}" Margin="0,6,0,0" />
+            </StackPanel>
+
+            <Border Grid.Row="1" Style="{StaticResource Card}">
+                <StackPanel x:Name="FileControls">
+                    <Label Content="_Исходный PDF" Target="{Binding ElementName=InputPath}" FontWeight="SemiBold" />
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBox x:Name="InputPath" IsReadOnly="True" AutomationProperties.Name="Исходный PDF" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                        <Button Grid.Column="1" Content="_Выбрать…" Margin="10,0,0,0" Click="ChoosePdf_Click" />
+                    </Grid>
+                    <TextBlock Text="Или перетащите сюда один PDF-файл." Foreground="{StaticResource Muted}" Margin="0,8,0,22" FontSize="12" />
+                    <Label Content="Папка _результата" Target="{Binding ElementName=OutputPath}" FontWeight="SemiBold" />
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBox x:Name="OutputPath" AutomationProperties.Name="Папка результата" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                        <Button Grid.Column="1" Content="_Папка…" Margin="10,0,0,0" Click="ChooseOutput_Click" />
+                    </Grid>
+                    <TextBlock Text="Для каждой конвертации создаётся новая подпапка. Существующие файлы сохраняются." Foreground="{StaticResource Muted}" Margin="0,8,0,0" FontSize="12" />
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Style="{StaticResource Card}">
+                <StackPanel x:Name="OptionControls">
+                    <TextBlock Text="Параметры конвертации" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,18" />
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <Label Content="_Разрешение" Target="{Binding ElementName=DpiChoice}" />
+                            <ComboBox x:Name="DpiChoice" SelectedIndex="0" AutomationProperties.Name="Разрешение в DPI">
+                                <ComboBoxItem Content="200 DPI — как в образце" Tag="200" />
+                                <ComboBoxItem Content="300 DPI" Tag="300" />
+                                <ComboBoxItem Content="600 DPI" Tag="600" />
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <Label Content="_Цветность" Target="{Binding ElementName=ColorChoice}" />
+                            <ComboBox x:Name="ColorChoice" SelectedIndex="0" SelectionChanged="ColorChoice_SelectionChanged" AutomationProperties.Name="Цветность">
+                                <ComboBoxItem Content="Цветной" Tag="Color" />
+                                <ComboBoxItem Content="Оттенки серого" Tag="Grayscale" />
+                                <ComboBoxItem Content="Чёрно-белый (1 бит)" Tag="BlackAndWhite" />
+                            </ComboBox>
+                        </StackPanel>
+                    </Grid>
+                    <Grid Margin="0,17,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <Label Content="_Страницы" Target="{Binding ElementName=OutputChoice}" />
+                            <ComboBox x:Name="OutputChoice" SelectedIndex="0" AutomationProperties.Name="Режим сохранения страниц">
+                                <ComboBoxItem Content="Отдельный TIFF для каждой страницы" Tag="SeparateFiles" />
+                                <ComboBoxItem Content="Один многостраничный TIFF" Tag="MultiPage" />
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <Label Content="С_жатие" Target="{Binding ElementName=CompressionChoice}" />
+                            <ComboBox x:Name="CompressionChoice" SelectedIndex="0" SelectionChanged="CompressionChoice_SelectionChanged" AutomationProperties.Name="Сжатие TIFF">
+                                <ComboBoxItem Content="LZW" Tag="Lzw" />
+                                <ComboBoxItem Content="Deflate (ZIP)" Tag="Deflate" />
+                                <ComboBoxItem Content="Без сжатия" Tag="None" />
+                                <ComboBoxItem Content="CCITT Group 4 — только чёрно-белый" Tag="Group4" />
+                            </ComboBox>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock x:Name="CompressionHint" Text="LZW сохраняет все детали изображения. Более высокое DPI увеличивает время и размер файлов." Foreground="{StaticResource Muted}" FontSize="12" Margin="0,12,0,0" />
+                    <StackPanel x:Name="ThresholdPanel" Visibility="Collapsed" Margin="0,16,0,0">
+                        <Label Content="Порог чёрно-белого: больше значение — темнее результат" Target="{Binding ElementName=ThresholdSlider}" />
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="48" /></Grid.ColumnDefinitions>
+                            <Slider x:Name="ThresholdSlider" Minimum="0" Maximum="255" Value="180" TickFrequency="1" IsSnapToTickEnabled="True" AutoToolTipPlacement="TopLeft" VerticalAlignment="Center" AutomationProperties.Name="Порог чёрно-белого от 0 до 255" />
+                            <TextBlock Grid.Column="1" Text="{Binding Value, ElementName=ThresholdSlider, StringFormat={}{0:0}}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                        </Grid>
+                        <TextBlock Text="Полутона исчезнут. Проверьте светло-серый текст на готовых страницах." FontSize="12" Foreground="{StaticResource Muted}" Margin="0,8,0,0" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock x:Name="StatusText" Text="Выберите PDF для конвертации." FontWeight="SemiBold" AutomationProperties.LiveSetting="Polite" />
+                    <ProgressBar x:Name="ConversionProgressBar" Height="7" Minimum="0" Maximum="1" Value="0" Margin="0,14,0,0" AutomationProperties.Name="Ход конвертации" />
+                    <TextBlock x:Name="ResultText" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,10,0,0" Visibility="Collapsed" />
+                    <Button x:Name="OpenResultButton" Content="_Открыть папку результата" HorizontalAlignment="Left" Margin="0,12,0,0" Click="OpenResult_Click" Visibility="Collapsed" />
+                </StackPanel>
+            </Border>
+
+            <Grid Grid.Row="4">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock Text="Файлы никуда не отправляются." Foreground="{StaticResource Muted}" FontSize="12" VerticalAlignment="Center" Margin="0,0,16,0" />
+                <Button x:Name="CancelButton" Grid.Column="1" Content="О_тменить" Click="Cancel_Click" IsEnabled="False" Margin="0,0,10,0" />
+                <Button x:Name="ConvertButton" Grid.Column="2" Content="_Конвертировать" Click="Convert_Click" IsDefault="True" Background="{StaticResource Accent}" Foreground="White" BorderBrush="{StaticResource Accent}" FontWeight="SemiBold" />
+            </Grid>
+        </Grid>
+    </ScrollViewer>
+</Window>
