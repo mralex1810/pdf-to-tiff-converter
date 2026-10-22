@@ -186,7 +186,11 @@ internal static class Program
         public void Fail(Exception ex)
         {
             if (_finished)
+            {
+                Console.Error.WriteLine("WPF UI SMOKE FAILED DURING SHUTDOWN: " + ex);
+                application.Shutdown(1);
                 return;
+            }
             Console.Error.WriteLine("WPF UI SMOKE FAILED: " + ex);
             Finish(1);
         }
@@ -228,9 +232,11 @@ internal static class Program
             shutdownGuard.Tick += (_, _) =>
             {
                 shutdownGuard.Stop();
+                finalExitCode = 1;
                 Console.Error.WriteLine("WPF UI SMOKE FAILED: window did not close within 5 seconds.");
                 application.Shutdown(1);
             };
+            window.Closing += (_, e) => Console.WriteLine("Window closing; cancelled: " + e.Cancel);
             window.Closed += (_, _) =>
             {
                 shutdownGuard.Stop();

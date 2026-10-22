@@ -256,7 +256,7 @@ public partial class MainWindow : Window
 
     private async void Window_Closing(object? sender, CancelEventArgs e)
     {
-        if (_allowClose || _conversionTask is null)
+        if (_allowClose || _conversionTask is null || _conversionTask.IsCompleted)
             return;
         e.Cancel = true;
         if (_isClosing)
@@ -269,7 +269,9 @@ public partial class MainWindow : Window
         finally
         {
             _allowClose = true;
-            Close();
+            // A completed await can resume inside the original Closing event.
+            // Queue the next close to avoid re-entering Window.Close().
+            Dispatcher.BeginInvoke(new Action(Close));
         }
     }
 }
