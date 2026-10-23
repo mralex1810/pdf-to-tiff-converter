@@ -154,12 +154,14 @@ try {
     await page.waitForFunction(() => !document.getElementById('convert').disabled);
     assert.ok(await page.locator('#result-created').isHidden());
     assert.equal(await page.locator('#result-created-time').getAttribute('datetime'), null);
+    assert.equal(await page.locator('#file-downloads a').count(), 0);
   }
-  async function settings({ dpi = '200', color = 'color', compression = 'lzw', outputMode = 'separate' } = {}) {
+  async function settings({ dpi = '200', color = 'color', compression = 'lzw', outputMode = 'separate', downloadMode = 'zip' } = {}) {
     await page.locator('#dpi').selectOption(dpi);
     await page.locator('#color-mode').selectOption(color);
     await page.locator('#compression').selectOption(compression);
     await page.locator('#output-mode').selectOption(outputMode);
+    if (outputMode === 'separate') await page.locator('#download-mode').selectOption(downloadMode);
   }
   async function convertAndSave(label) {
     const before = downloadEvents;
@@ -184,6 +186,7 @@ try {
     return bytes;
   }
 
+  let defaultTiffs;
   await test('defaults-and-separate-tiffs', async () => {
     assert.equal(await page.locator('#dpi').inputValue(), '400');
     assert.equal(await page.locator('#color-mode').inputValue(), 'bw');
@@ -191,9 +194,11 @@ try {
     assert.ok(await page.locator('#threshold').isVisible());
     assert.ok(await page.locator('#threshold').isEnabled());
     assert.equal(await page.locator('#output-mode').inputValue(), 'separate');
+    assert.equal(await page.locator('#download-mode').inputValue(), 'zip');
     assert.ok(await page.locator('#convert').isDisabled());
     await selectPdf(path.join(repo, 'tests/fixtures/two-pages.pdf'));
     const files = unzipSync(await convertAndSave('defaults'));
+    defaultTiffs = files;
     const names = Object.keys(files).sort();
     assert.deepEqual(names, ['two-pages_page_001.tiff', 'two-pages_page_002.tiff']);
     for (let index = 0; index < names.length; index++) {
@@ -226,9 +231,71 @@ try {
     }
   });
 
+  await test('direct-tiff-downloads-and-individual-links', async () => {
+    await settings({ dpi: '400', color: 'bw', compression: 'packbits', downloadMode: 'files' });
+    const before = downloadEvents;
+    await page.locator('#convert').click();
+    await page.waitForFunction(() => !document.getElementById('convert').disabled);
+    assert.equal(downloadEvents, before, 'conversion itself never downloads files');
+    assert.equal(await page.locator('#download').textContent(), 'Скачать все TIFF (2)');
+    assert.equal(await page.locator('#file-downloads a').count(), 2);
+    const createdAt = await page.locator('#result-created-time').getAttribute('datetime');
+    const urls = await page.locator('#file-downloads a').evaluateAll(links => links.map(link => link.href));
+
+    // Changing a setting must not silently replace the already generated files.
+    await page.locator('#download-mode').selectOption('zip');
+    assert.equal(await page.locator('#result-created-time').getAttribute('datetime'), createdAt);
+    const downloads = [];
+    const collect = d => downloads.push(d);
+    page.on('download', collect);
+    try {
+      await page.locator('#download').click();
+      const deadline = Date.now() + 15_000;
+      while (downloads.length < 2 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+      assert.equal(downloads.length, 2);
+      for (const download of downloads) {
+        assert.equal(await download.failure(), null);
+        assert.deepEqual(new Uint8Array(await readFile(await download.path())), defaultTiffs[download.suggestedFilename()]);
+      }
+    } finally { page.off('download', collect); }
+    assert.equal(await page.locator('#result-created-time').getAttribute('datetime'), createdAt);
+
+    const pending = page.waitForEvent('download');
+    await page.locator('#file-downloads a').nth(1).click();
+    const second = await pending;
+    assert.equal(second.suggestedFilename(), 'two-pages_page_002.tiff');
+    assert.deepEqual(new Uint8Array(await readFile(await second.path())), defaultTiffs[second.suggestedFilename()]);
+
+    await page.evaluate(() => {
+      window.originalRevokeForTest = URL.revokeObjectURL;
+      window.revokedForTest = [];
+      URL.revokeObjectURL = url => { window.revokedForTest.push(url); window.originalRevokeForTest.call(URL, url); };
+    });
+    try {
+      await selectPdf(path.join(repo, 'tests/fixtures/two-pages.pdf'));
+      assert.ok(await page.evaluate(urls => urls.every(url => window.revokedForTest.includes(url)), urls), 'all individual file URLs are released');
+    } finally {
+      await page.evaluate(() => { URL.revokeObjectURL = window.originalRevokeForTest; delete window.originalRevokeForTest; delete window.revokedForTest; });
+    }
+  });
+
+  await test('single-page-direct-tiff', async () => {
+    await selectPdf({ name: 'single.pdf', mimeType: 'application/pdf', buffer: formPdf });
+    await settings({ dpi: '400', color: 'bw', compression: 'packbits', downloadMode: 'files' });
+    const directories = tiffDirectories(await convertAndSave('single-file'));
+    assert.equal(report.downloads.at(-1).name, 'single_page_001.tiff');
+    assert.equal(directories.length, 1);
+    checkTags(directories[0], { width: 400, height: 400, bits: 1, samples: 1, compression: 32773, dpi: 400, photometric: 0 });
+    assert.equal(await page.locator('#file-downloads a').count(), 1);
+    await selectPdf(path.join(repo, 'tests/fixtures/two-pages.pdf'));
+  });
+
   await test('multipage-bitonal-400dpi-packbits', async () => {
+    await page.locator('#download-mode').selectOption('files');
     await settings({ dpi: '400', color: 'bw', compression: 'packbits', outputMode: 'multi' });
+    assert.ok(await page.locator('#download-mode-field').isHidden());
     const directories = tiffDirectories(await convertAndSave('multipage-packbits'));
+    assert.equal(await page.locator('#file-downloads a').count(), 0);
     assert.equal(directories.length, 2);
     for (const tags of directories) checkTags(tags, { width: 800, height: 1200, bits: 1, samples: 1, compression: 32773, dpi: 400, photometric: 0 });
   });

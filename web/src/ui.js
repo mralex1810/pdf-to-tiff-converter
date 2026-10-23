@@ -43,6 +43,10 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
             <select id="output-mode"><option value="separate">Отдельный TIFF для каждой страницы</option><option value="multi">Один многостраничный TIFF</option></select>
             <p id="output-hint" class="hint">Все страницы сохранятся в одном ZIP-архиве.</p>
           </div>
+          <div id="download-mode-field" class="field">
+            <label for="download-mode">Как скачать страницы</label>
+            <select id="download-mode"><option value="zip">ZIP-архив</option><option value="files">Отдельные TIFF-файлы без архива</option></select>
+          </div>
           <div class="field-row">
             <div class="field">
               <label for="dpi">Разрешение</label>
@@ -78,6 +82,7 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
           <a id="download" class="button primary download" hidden>Скачать результат</a>
           <p id="result-created" class="hint" hidden>Результат создан: <time id="result-created-time"></time></p>
           <p id="download-hint" class="hint" hidden>Файл уже готов. Нажмите кнопку, чтобы сохранить его на компьютер.</p>
+          <ul id="file-downloads" class="file-downloads" aria-label="Скачать отдельные TIFF-файлы" hidden></ul>
         </section>
       </section>
 
@@ -99,11 +104,13 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
   let selectedFile = null;
   let busy = false;
   let cancelled = false;
-  let resultUrl = null;
+  let resultDownloads = [];
 
   function clearResult() {
-    if (resultUrl) URL.revokeObjectURL(resultUrl);
-    resultUrl = null;
+    for (const file of resultDownloads) URL.revokeObjectURL(file.url);
+    resultDownloads = [];
+    get('file-downloads').replaceChildren();
+    get('file-downloads').hidden = true;
     download.removeAttribute('href');
     download.hidden = true;
     get('result-created').hidden = true;
@@ -181,9 +188,21 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
   document.addEventListener('dragover', event => event.preventDefault());
   document.addEventListener('drop', event => event.preventDefault());
 
-  get('output-mode').addEventListener('change', () => {
-    get('output-hint').textContent = get('output-mode').value === 'separate'
-      ? 'Все страницы сохранятся в одном ZIP-архиве.' : 'Все страницы сохранятся внутри одного файла TIFF.';
+  function updateOutputControls() {
+    const separate = get('output-mode').value === 'separate';
+    get('download-mode-field').hidden = !separate;
+    get('output-hint').textContent = !separate
+      ? 'Все страницы сохранятся внутри одного файла TIFF.'
+      : get('download-mode').value === 'zip'
+        ? 'Все страницы сохранятся в одном ZIP-архиве.'
+        : 'Каждая страница скачается отдельным TIFF-файлом. Браузер может запросить разрешение на несколько скачиваний.';
+  }
+  get('output-mode').addEventListener('change', updateOutputControls);
+  get('download-mode').addEventListener('change', updateOutputControls);
+  download.addEventListener('click', event => {
+    if (resultDownloads.length <= 1) return;
+    event.preventDefault();
+    for (const link of get('file-downloads').querySelectorAll('a')) link.click();
   });
   function updateColorControls() {
     const bw = get('color-mode').value === 'bw';
@@ -209,6 +228,7 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
       compression: get('compression').value, threshold: Number(get('threshold').value)
     };
     const separate = get('output-mode').value === 'separate';
+    const zip = separate && get('download-mode').value === 'zip';
     const base = outputBase(file.name);
     let pdf = null;
     cancelled = false;
@@ -244,14 +264,32 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
         await nextFrame();
       }
       checkCancelled();
-      say(separate ? 'Собираем ZIP-архив…' : 'Собираем многостраничный TIFF…');
+      say(zip ? 'Собираем ZIP-архив…' : separate ? 'Подготавливаем TIFF-файлы…' : 'Собираем многостраничный TIFF…');
       await nextFrame();
-      const result = separate ? zipSync(entries, { level: 0 }) : encodeTiff(pages, options);
+      const files = zip ? [[`${base}_tiff.zip`, zipSync(entries, { level: 0 })]]
+        : separate ? Object.entries(entries) : [[`${base}.tiff`, encodeTiff(pages, options)]];
       checkCancelled();
-      resultUrl = URL.createObjectURL(new Blob([result], { type: separate ? 'application/zip' : 'image/tiff' }));
-      download.href = resultUrl;
-      download.download = separate ? `${base}_tiff.zip` : `${base}.tiff`;
-      download.textContent = separate ? 'Скачать ZIP с TIFF' : 'Скачать TIFF';
+      for (const [name, bytes] of files) {
+        resultDownloads.push({ name, url: URL.createObjectURL(new Blob([bytes], { type: zip ? 'application/zip' : 'image/tiff' })) });
+      }
+      download.href = resultDownloads[0].url;
+      download.download = resultDownloads[0].name;
+      download.textContent = zip ? 'Скачать ZIP с TIFF' : resultDownloads.length === 1 ? 'Скачать TIFF' : `Скачать все TIFF (${resultDownloads.length})`;
+      if (separate && !zip) {
+        for (const file of resultDownloads) {
+          const item = document.createElement('li');
+          const link = document.createElement('a');
+          link.href = file.url;
+          link.download = file.name;
+          link.textContent = file.name;
+          item.append(link);
+          get('file-downloads').append(item);
+        }
+        get('file-downloads').hidden = false;
+      }
+      get('download-hint').textContent = resultDownloads.length > 1
+        ? 'Браузер может запросить разрешение на несколько скачиваний. Если скачались не все страницы, сохраните их по ссылкам ниже.'
+        : 'Файл уже готов. Нажмите кнопку, чтобы сохранить его на компьютер.';
       const createdAt = new Date();
       get('result-created-time').dateTime = createdAt.toISOString();
       get('result-created-time').textContent = createdAt.toLocaleString('ru-RU', {
@@ -262,7 +300,7 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
       download.hidden = false;
       get('download-hint').hidden = false;
       progress.value = 100;
-      say(`Готово. Страниц: ${pdf.numPages}. Размер результата: ${formatSize(result.byteLength)}.`);
+      say(`Готово. Страниц: ${pdf.numPages}. Размер результата: ${formatSize(files.reduce((total, [, bytes]) => total + bytes.byteLength, 0))}.`);
     } catch (error) {
       clearResult();
       progress.hidden = true;
