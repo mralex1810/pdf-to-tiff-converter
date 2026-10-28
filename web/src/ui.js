@@ -1,6 +1,7 @@
 const MAX_FILE_BYTES = 128 * 1024 * 1024;
 const MAX_PAGE_PIXELS = 80_000_000;
-const MAX_RAW_BYTES = 256 * 1024 * 1024;
+const MAX_PAGE_BYTES = 256 * 1024 * 1024;
+const MAX_RESULT_BYTES = 256 * 1024 * 1024;
 
 const nextFrame = () => new Promise(resolve => setTimeout(resolve, 0));
 const formatSize = bytes => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(bytes < 1024 * 1024 ? bytes / 1024 : bytes / 1024 / 1024) + (bytes < 1024 * 1024 ? ' КиБ' : ' МиБ');
@@ -11,13 +12,14 @@ function outputBase(name) {
 }
 
 function readableError(error) {
+  if (error?.code === 'TIFF_SIZE_LIMIT') return 'Размер готовых TIFF превышает 256 МиБ. Уменьшите DPI, включите сжатие или разделите PDF.';
   if (error?.name === 'PasswordException') return 'PDF защищён паролем. Сначала сохраните копию без пароля и выберите её.';
   if (error?.name === 'InvalidPDFException') return 'Не удалось прочитать PDF. Возможно, файл повреждён или имеет другой формат.';
   if (error instanceof RangeError) return 'Браузеру не хватило памяти. Уменьшите DPI или разделите PDF на несколько документов.';
   return error?.message || 'Не удалось выполнить конвертацию. Попробуйте другой PDF или уменьшите DPI.';
 }
 
-export function initUi({ openPdf, encodeTiff, zipSync }) {
+export function initUi({ openPdf, encodeTiff, createTiffEncoder, zipSync }) {
   const root = document.getElementById('app');
   root.innerHTML = `
     <main class="shell">
@@ -88,7 +90,7 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
 
       <footer class="notes">
         <p><svg viewBox="0 0 16 18" fill="none" aria-hidden="true"><rect x="2" y="7" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M5 7V4a3 3 0 0 1 6 0v3" stroke="currentColor" stroke-width="1.5"/></svg> Документы обрабатываются в этом браузере и никуда не отправляются.</p>
-        <details><summary>Ограничения браузерной версии</summary><p>Подходит для небольших документов. PDF до 128 МиБ. До 80 млн пикселей на страницу и до 256 МиБ растровых данных на документ; при высоком DPI лимит достигается быстрее. При нехватке памяти уменьшите DPI или разделите PDF. PDF с паролем не поддерживаются. Во время обработки держите вкладку открытой.</p><p>PackBits и LZW сохраняют изображение без потерь. Вариант «Без сжатия» создаёт заметно большие файлы. Сжатие CCITT Group 4 доступно в приложении для Windows.</p></details>
+        <details><summary>Ограничения браузерной версии</summary><p>PDF до 128 МиБ. Страницы обрабатываются по очереди: до 80 млн пикселей и 256 МиБ растровых данных на одну страницу. Готовые TIFF вместе — до 256 МиБ. Размер исходного PDF не определяет объём изображения при выбранном DPI. При нехватке памяти уменьшите DPI или разделите PDF. PDF с паролем не поддерживаются. Во время обработки держите вкладку открытой.</p><p>PackBits и LZW сохраняют изображение без потерь. Вариант «Без сжатия» создаёт заметно большие файлы. Сжатие CCITT Group 4 доступно в приложении для Windows.</p></details>
       </footer>
     </main>`;
 
@@ -244,22 +246,25 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
       checkCancelled();
       if (!Number.isInteger(pdf.numPages) || pdf.numPages < 1) throw new Error('В PDF нет страниц для конвертации.');
       const entries = Object.create(null);
-      const pages = [];
+      const multiPage = separate ? null : createTiffEncoder({ ...options, maxBytes: MAX_RESULT_BYTES });
       const digits = Math.max(3, String(pdf.numPages).length);
-      let rawBytes = 0;
+      let encodedBytes = 0;
       for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
         checkCancelled();
+        if (separate && encodedBytes >= MAX_RESULT_BYTES) throw new Error('Размер готовых TIFF достиг лимита 256 МиБ. Уменьшите DPI, включите сжатие или разделите PDF.');
         say(`Обрабатываем страницу ${pageNo} из ${pdf.numPages}…`);
         await nextFrame();
-        const page = await pdf.renderPage(pageNo, options.dpi, MAX_RAW_BYTES - rawBytes);
+        let page = await pdf.renderPage(pageNo, options.dpi, MAX_PAGE_BYTES);
         checkCancelled();
         if (!page || !Number.isInteger(page.width) || !Number.isInteger(page.height) || page.width <= 0 || page.height <= 0 || page.width * page.height > MAX_PAGE_PIXELS) {
           throw new Error('Страница слишком большая: допустимо до 80 млн пикселей. Уменьшите DPI.');
         }
-        rawBytes += page.width * page.height * 4;
-        if (rawBytes > MAX_RAW_BYTES) throw new Error('Документ превышает лимит памяти браузерной версии (256 МиБ растровых данных). Уменьшите DPI или разделите PDF.');
-        if (separate) entries[`${base}_page_${String(pageNo).padStart(digits, '0')}.tiff`] = encodeTiff([page], options);
-        else pages.push(page);
+        if (separate) {
+          const bytes = encodeTiff([page], { ...options, maxBytes: MAX_RESULT_BYTES - encodedBytes });
+          encodedBytes += bytes.byteLength;
+          entries[`${base}_page_${String(pageNo).padStart(digits, '0')}.tiff`] = bytes;
+        } else multiPage.addPage(page);
+        page = null; // Only encoded TIFF bytes survive between pages, never previous RGBA rasters.
         progress.value = Math.round(pageNo / pdf.numPages * 90);
         await nextFrame();
       }
@@ -267,7 +272,7 @@ export function initUi({ openPdf, encodeTiff, zipSync }) {
       say(zip ? 'Собираем ZIP-архив…' : separate ? 'Подготавливаем TIFF-файлы…' : 'Собираем многостраничный TIFF…');
       await nextFrame();
       const files = zip ? [[`${base}_tiff.zip`, zipSync(entries, { level: 0 })]]
-        : separate ? Object.entries(entries) : [[`${base}.tiff`, encodeTiff(pages, options)]];
+        : separate ? Object.entries(entries) : [[`${base}.tiff`, multiPage.finish()]];
       checkCancelled();
       for (const [name, bytes] of files) {
         resultDownloads.push({ name, url: URL.createObjectURL(new Blob([bytes], { type: zip ? 'application/zip' : 'image/tiff' })) });

@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { encodeTiff } from '../src/tiff.js';
+import { createTiffEncoder, encodeTiff } from '../src/tiff.js';
 
 function page(width, height, pixel) {
   const data = new Uint8Array(width * height * 4);
@@ -115,6 +115,52 @@ test('composites alpha against white and applies grayscale and threshold', () =>
   assert.deepEqual([...bitonal.slice(directories(bitonal)[0][273][0])], [0x20]);
 });
 
+test('incremental pages keep only encoded bytes and finish with the actual page count', () => {
+  for (const colorMode of ['color', 'grayscale', 'bitonal']) {
+    for (const compression of ['none', 'lzw', 'packbits']) {
+      const first = page(1031, 71, (x, y) => [x & 255, y & 255, (x + y) & 255, 255]);
+      const second = page(13, 9, (x, y) => [x * 17, y * 31, 77, 255]);
+      const options = { colorMode, compression, dpi: 400 };
+      const expected = encodeTiff([first, second], options);
+      const encoder = createTiffEncoder(options);
+      assert.equal(encoder.byteLength, 8);
+      encoder.addPage(first);
+      assert.equal(encoder.byteLength, encodeTiff([first], options).length);
+      first.data.fill(0); // Reusing a renderer buffer must not corrupt an earlier page.
+      encoder.addPage(second);
+      second.data.fill(255);
+      assert.equal(encoder.byteLength, expected.length);
+      const actual = encoder.finish();
+      assert.deepEqual(actual, expected);
+      assert.deepEqual(directories(actual).map(tags => tags[297]), [[0, 2], [1, 2]]);
+      assert.equal(encoder.byteLength, actual.length);
+      assert.throws(() => encoder.addPage(first), /closed/);
+      assert.throws(() => encoder.finish(), /closed/);
+    }
+  }
+  assert.throws(() => createTiffEncoder().finish(), /At least one page/);
+});
+
+test('incremental output budget includes metadata and fails before retaining oversized output', () => {
+  const input = page(100, 1000, (x, y) => [x & 255, y & 255, (x + y) & 255, 255]);
+  const options = { colorMode: 'color', compression: 'none' };
+  const single = encodeTiff([input], options);
+  const exact = createTiffEncoder({ ...options, maxBytes: single.length });
+  exact.addPage(input);
+  assert.equal(exact.finish().length, single.length);
+  const limitError = error => error.code === 'TIFF_SIZE_LIMIT' && !(error instanceof RangeError);
+  const small = createTiffEncoder({ ...options, maxBytes: single.length - 1 });
+  assert.throws(() => small.addPage(input), limitError);
+  assert.equal(small.byteLength, 0, 'size failure discards previously retained strips');
+  assert.throws(() => small.finish(), /closed/);
+  const secondPageLimit = createTiffEncoder({ ...options, maxBytes: single.length + 16 });
+  secondPageLimit.addPage(input);
+  assert.throws(() => secondPageLimit.addPage(input), limitError);
+  assert.equal(secondPageLimit.byteLength, 0);
+  const metadataLimit = createTiffEncoder({ maxBytes: 8 });
+  assert.throws(() => metadataLimit.addPage(page(1, 1, () => [255, 255, 255, 255])), limitError);
+});
+
 test('rejects invalid inputs instead of writing a misleading TIFF', () => {
   const valid = page(1, 1, () => [0, 0, 0, 255]);
   assert.throws(() => encodeTiff([]), /At least one/);
@@ -172,7 +218,15 @@ test('independent Pillow/libtiff decode matches every pixel for LZW/None/PackBit
             return [value, value, value, 255];
           }));
         }
-        writeFileSync(join(directory, `${name}.tiff`), encodeTiff(pages, { colorMode, compression, dpi: 200, threshold: 180 }));
+        const encoder = createTiffEncoder({ colorMode, compression, dpi: 200, threshold: 180 });
+        for (const input of pages) {
+          const reusable = { ...input, data: new Uint8Array(input.data) };
+          encoder.addPage(reusable);
+          reusable.data.fill(0); // Independent decoder must still see the original pixels.
+        }
+        const encoded = encoder.finish();
+        assert.equal(encoder.byteLength, encoded.length);
+        writeFileSync(join(directory, `${name}.tiff`), encoded);
         const expected = pages.map((input, index) => {
           const data = new Uint8Array(input.width * input.height * (colorMode === 'color' ? 3 : 1));
           let out = 0;

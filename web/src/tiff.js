@@ -117,52 +117,95 @@ function encodeStrip(page, firstRow, rows, mode, threshold, rowBytes) {
 }
 
 /**
- * Encode RGBA pages as a little-endian, strip-based classic TIFF.
- * Bitonal pages use 0=white, 1=black; unused bits at each row's end are white.
- * @param {{width:number,height:number,data:Uint8Array|Uint8ClampedArray}[]} pages
- * @param {{dpi?:number,colorMode?:string,compression?:string,threshold?:number}} options
- * @returns {Uint8Array}
+ * Encode pages immediately, retaining only compressed strips and TIFF metadata.
+ * Callers may release/reuse an RGBA buffer as soon as addPage returns.
+ * byteLength is the exact eventual TIFF length, including directories.
  */
-export function encodeTiff(pages, { dpi = 400, colorMode = 'bw', compression = 'packbits', threshold = 180 } = {}) {
-  if (!Array.isArray(pages) || pages.length === 0) throw new TypeError('At least one page is required');
-  integer(pages.length, 'Page count', 1, 65535);
+export function createTiffEncoder({ dpi = 400, colorMode = 'bw', compression = 'packbits', threshold = 180, maxBytes = TIFF_LIMIT } = {}) {
   integer(dpi, 'DPI', 1, 65535);
   integer(threshold, 'Threshold', 0, 255);
+  integer(maxBytes, 'TIFF byte limit', 1, TIFF_LIMIT);
   if (['black-and-white', 'bw', 'blackWhite', 'blackAndWhite'].includes(colorMode)) colorMode = 'bitonal';
   if (!['color', 'grayscale', 'bitonal'].includes(colorMode)) throw new RangeError('Unknown color mode');
   if (!['lzw', 'none', 'packbits'].includes(compression)) throw new RangeError('Unknown TIFF compression');
 
   const channels = colorMode === 'color' ? 3 : 1;
   const bits = colorMode === 'bitonal' ? 1 : 8;
-  const records = pages.map((page, pageIndex) => {
-    integer(page.width, 'Width', 1, TIFF_LIMIT);
-    integer(page.height, 'Height', 1, TIFF_LIMIT);
-    if (!(page.data instanceof Uint8Array || page.data instanceof Uint8ClampedArray) || page.data.length !== page.width * page.height * 4) {
-      throw new TypeError('Page data must contain width * height * 4 RGBA bytes');
-    }
-    const rowBytes = Math.ceil(page.width * channels * bits / 8);
-    const rowsPerStrip = Math.max(1, Math.min(page.height, Math.floor(STRIP_BYTES / rowBytes)));
-    const strips = [];
-    for (let row = 0; row < page.height; row += rowsPerStrip) {
-      const raw = encodeStrip(page, row, Math.min(rowsPerStrip, page.height - row), colorMode, threshold, rowBytes);
-      strips.push(compression === 'lzw' ? tiffLzw(raw) : compression === 'packbits' ? tiffPackBits(raw, rowBytes) : raw);
-    }
-    const stripOffsets = new Array(strips.length).fill(0);
-    const entries = [
-      [256, 4, [page.width]], [257, 4, [page.height]],
-      [258, 3, new Array(channels).fill(bits)],
-      [259, 3, [compression === 'lzw' ? 5 : compression === 'packbits' ? 32773 : 1]],
-      [262, 3, [colorMode === 'color' ? 2 : colorMode === 'grayscale' ? 1 : 0]],
-      [273, 4, stripOffsets], [274, 3, [1]], [277, 3, [channels]],
-      [278, 4, [rowsPerStrip]], [279, 4, strips.map(strip => strip.length)],
-      [282, 5, [dpi, 1]], [283, 5, [dpi, 1]], [284, 3, [1]],
-      [296, 3, [2]], [297, 3, [pageIndex, pages.length]],
-    ].map(([tag, type, values]) => ({ tag, type, values, count: type === 5 ? values.length / 2 : values.length }));
-    return { entries, strips, stripOffsets };
-  });
+  const records = [];
+  let byteLength = 8;
+  let closed = false;
 
+  function ensureOpen() {
+    if (closed) throw new Error('TIFF encoder is closed');
+  }
+  function ensureSize(size) {
+    if (size <= maxBytes) return;
+    records.length = 0;
+    byteLength = 0;
+    closed = true;
+    const error = new Error('Готовый TIFF превышает допустимый размер. Уменьшите DPI или разделите PDF.');
+    error.code = 'TIFF_SIZE_LIMIT';
+    error.maxBytes = maxBytes;
+    throw error;
+  }
+
+  return {
+    get byteLength() { return byteLength; },
+    addPage(page) {
+      ensureOpen();
+      integer(records.length + 1, 'Page count', 1, 65535);
+      integer(page.width, 'Width', 1, TIFF_LIMIT);
+      integer(page.height, 'Height', 1, TIFF_LIMIT);
+      if (!(page.data instanceof Uint8Array || page.data instanceof Uint8ClampedArray) || page.data.length !== page.width * page.height * 4) {
+        throw new TypeError('Page data must contain width * height * 4 RGBA bytes');
+      }
+      const rowBytes = Math.ceil(page.width * channels * bits / 8);
+      const rowsPerStrip = Math.max(1, Math.min(page.height, Math.floor(STRIP_BYTES / rowBytes)));
+      const stripCount = Math.ceil(page.height / rowsPerStrip);
+      // Fifteen entries, two DPI rationals, optional RGB bits and strip tables.
+      let addedBytes = 2 + 15 * 12 + 4 + 16 + (channels === 3 ? 6 : 0) + (stripCount > 1 ? stripCount * 8 : 0);
+      ensureSize(byteLength + addedBytes);
+      const strips = [];
+      for (let row = 0; row < page.height; row += rowsPerStrip) {
+        const raw = encodeStrip(page, row, Math.min(rowsPerStrip, page.height - row), colorMode, threshold, rowBytes);
+        const strip = compression === 'lzw' ? tiffLzw(raw) : compression === 'packbits' ? tiffPackBits(raw, rowBytes) : raw;
+        addedBytes += strip.length;
+        ensureSize(byteLength + addedBytes);
+        strips.push(strip);
+      }
+      const stripOffsets = new Array(strips.length).fill(0);
+      const entries = [
+        [256, 4, [page.width]], [257, 4, [page.height]],
+        [258, 3, new Array(channels).fill(bits)],
+        [259, 3, [compression === 'lzw' ? 5 : compression === 'packbits' ? 32773 : 1]],
+        [262, 3, [colorMode === 'color' ? 2 : colorMode === 'grayscale' ? 1 : 0]],
+        [273, 4, stripOffsets], [274, 3, [1]], [277, 3, [channels]],
+        [278, 4, [rowsPerStrip]], [279, 4, strips.map(strip => strip.length)],
+        [282, 5, [dpi, 1]], [283, 5, [dpi, 1]], [284, 3, [1]],
+        [296, 3, [2]], [297, 3, [records.length, 0]],
+      ].map(([tag, type, values]) => ({ tag, type, values, count: type === 5 ? values.length / 2 : values.length }));
+      records.push({ entries, strips, stripOffsets });
+      byteLength += addedBytes;
+    },
+    finish() {
+      ensureOpen();
+      if (records.length === 0) throw new TypeError('At least one page is required');
+      ensureSize(byteLength);
+      closed = true;
+      try {
+        return serializeTiff(records, byteLength);
+      } finally {
+        // No strip buffers remain retained alongside the finished Uint8Array.
+        records.length = 0;
+      }
+    },
+  };
+}
+
+function serializeTiff(records, expectedSize) {
   let size = 8;
   for (const record of records) {
+    record.entries.find(entry => entry.tag === 297).values[1] = records.length;
     record.offset = size;
     size += 2 + record.entries.length * 12 + 4;
   }
@@ -179,9 +222,9 @@ export function encodeTiff(pages, { dpi = 400, colorMode = 'bw', compression = '
     for (let i = 0; i < record.strips.length; i++) {
       record.stripOffsets[i] = size;
       size += record.strips[i].length;
-      if (size > TIFF_LIMIT) throw new RangeError('TIFF exceeds the classic TIFF 4 GiB limit');
     }
   }
+  if (size !== expectedSize) throw new Error('TIFF size accounting mismatch');
   const output = new Uint8Array(size);
   const view = new DataView(output.buffer);
   output.set([0x49, 0x49, 42, 0]);
@@ -211,4 +254,13 @@ export function encodeTiff(pages, { dpi = 400, colorMode = 'bw', compression = '
     for (let i = 0; i < record.strips.length; i++) output.set(record.strips[i], record.stripOffsets[i]);
   }
   return output;
+}
+
+/** Encode an existing array of RGBA pages using the same incremental writer. */
+export function encodeTiff(pages, options = {}) {
+  if (!Array.isArray(pages) || pages.length === 0) throw new TypeError('At least one page is required');
+  integer(pages.length, 'Page count', 1, 65535);
+  const encoder = createTiffEncoder(options);
+  for (const page of pages) encoder.addPage(page);
+  return encoder.finish();
 }

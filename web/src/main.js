@@ -1,6 +1,6 @@
 import * as pdfjs from 'pdfjs-dist/build/pdf.mjs';
 import { zipSync } from 'fflate';
-import { encodeTiff } from './tiff.js';
+import { encodeTiff, createTiffEncoder } from './tiff.js';
 import { initUi } from './ui.js';
 
 // The worker, fonts, CMaps, image codecs and ICC profile are embedded by build.mjs.
@@ -39,12 +39,15 @@ async function openPdf(file) {
     if (metadata.info.IsXFAPresent || doc.isPureXfa) throw new Error('XFA-формы не поддерживаются. Сначала сохраните PDF с обычными страницами.');
     return {
       numPages: doc.numPages,
-      async renderPage(number, dpi, remainingRawBytes = 256 * 1024 * 1024) {
+      async renderPage(number, dpi, maxPageBytes = 256 * 1024 * 1024) {
         const page = await doc.getPage(number);
         const viewport = page.getViewport({scale: dpi / 72});
         const width = Math.ceil(viewport.width - 1e-7), height = Math.ceil(viewport.height - 1e-7);
-        if (width * height * 4 > remainingRawBytes || width * height > 80_000_000 || width > 32767 || height > 32767) {
-          page.cleanup(); throw new Error('Слишком большая страница. Уменьшите DPI или используйте Windows-версию.');
+        if (width * height > 80_000_000 || width > 32767 || height > 32767) {
+          page.cleanup(); throw new Error(`Страница ${number}: ${width} × ${height} пикселей при ${dpi} DPI превышает допустимый размер страницы. Уменьшите DPI или используйте Windows-версию.`);
+        }
+        if (width * height * 4 > maxPageBytes) {
+          page.cleanup(); throw new Error(`Страница ${number}: для изображения ${width} × ${height} при ${dpi} DPI нужно ${Math.ceil(width * height * 4 / 1024 / 1024)} МиБ, лимит одной страницы — ${Math.floor(maxPageBytes / 1024 / 1024)} МиБ. Уменьшите DPI или используйте Windows-версию.`);
         }
         const canvas = document.createElement('canvas');
         canvas.width = width; canvas.height = height;
@@ -66,4 +69,4 @@ async function openPdf(file) {
     throw error;
   }
 }
-initUi({openPdf, encodeTiff, zipSync});
+initUi({openPdf, encodeTiff, createTiffEncoder, zipSync});

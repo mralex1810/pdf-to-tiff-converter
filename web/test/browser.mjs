@@ -48,6 +48,14 @@ const manyPages = count => pdfObjects([
     stream('1 0 0 rg 0 0 36 36 re f\n'),
   ]).flat(),
 ]);
+const sixA4Pages = pdfObjects([
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  '<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R 11 0 R 13 0 R] /Count 6 >>',
+  ...Array.from({ length: 6 }, (_, i) => [
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.276 841.89] /Resources << >> /Contents ${4 + i * 2} 0 R >>`,
+    stream('0 0 0 rg 20 20 30 30 re f\n'),
+  ]).flat(),
+]);
 const appearance = '1 0 0 rg 0 0 48 48 re f\n';
 const formPdf = pdfObjects([
   '<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >>',
@@ -121,6 +129,44 @@ function uncompressedPixel(bytes, tags, x, y) {
   const strip = Math.floor(y / tags[278][0]);
   const start = tags[273][strip] + ((y % tags[278][0]) * tags[256][0] + x) * tags[277][0];
   return [...bytes.slice(start, start + tags[277][0])];
+}
+
+// Decode a strip using the TIFF PackBits rules, independently of the encoder.
+// Only a 64 KiB strip is needed to verify a pixel on a full A4 page.
+function packBitsMonochromePixel(bytes, tags, x, y) {
+  assert.deepEqual(tags[259], [32773]);
+  assert.deepEqual(tags[258], [1]);
+  assert.deepEqual(tags[262], [0]);
+  const rowBytes = Math.ceil(tags[256][0] / 8);
+  const strip = Math.floor(y / tags[278][0]);
+  const rows = Math.min(tags[278][0], tags[257][0] - strip * tags[278][0]);
+  const decoded = new Uint8Array(rowBytes * rows);
+  let source = tags[273][strip], destination = 0;
+  const end = source + tags[279][strip];
+  while (source < end && destination < decoded.length) {
+    const header = bytes[source++];
+    if (header < 128) {
+      const count = header + 1;
+      assert.ok(source + count <= end && destination + count <= decoded.length);
+      decoded.set(bytes.subarray(source, source + count), destination);
+      source += count;
+      destination += count;
+    } else if (header > 128) {
+      const count = 257 - header;
+      assert.ok(source < end && destination + count <= decoded.length);
+      decoded.fill(bytes[source++], destination, destination + count);
+      destination += count;
+    }
+  }
+  assert.equal(destination, decoded.length, 'the complete strip must decode');
+  const value = decoded[(y % tags[278][0]) * rowBytes + (x >> 3)];
+  return value & (0x80 >> (x & 7)) ? 0 : 255;
+}
+
+function checkA4PackBitsPage(bytes, tags) {
+  checkTags(tags, { width: 3308, height: 4678, bits: 1, samples: 1, compression: 32773, dpi: 400, photometric: 0 });
+  assert.equal(packBitsMonochromePixel(bytes, tags, 200, 4478), 0, 'black rectangle at the bottom of the PDF renders');
+  assert.equal(packBitsMonochromePixel(bytes, tags, 1654, 2339), 255, 'empty page background remains white');
 }
 
 async function test(name, run) {
@@ -419,6 +465,79 @@ try {
     for (let p = 0; p < 2; p++) for (let i = 0; i < points.length; i++) {
       assert.deepEqual(uncompressedPixel(bytes, directories[p], ...points[i]), expected[p][i], `decoded image page ${p + 1}, quadrant ${i + 1}`);
     }
+  });
+
+  // Each page fits the raster budget; the six-page raw sum exceeds 256 MiB.
+  // This tiny vector PDF used to fail on its fifth page at the default DPI.
+  assert.ok(sixA4Pages.byteLength < 10_000);
+  assert.ok(6 * 3308 * 4678 * 4 > 256 * 1024 * 1024);
+  for (const mode of ['zip', 'files', 'multi']) {
+    await test(`six-a4-pages-400dpi-${mode}`, async () => {
+      await selectPdf({ name: 'six-a4.pdf', mimeType: 'application/pdf', buffer: sixA4Pages });
+      await settings({ dpi: '400', color: 'bw', compression: 'packbits', outputMode: mode === 'multi' ? 'multi' : 'separate', downloadMode: mode === 'files' ? 'files' : 'zip' });
+      if (mode === 'files') {
+        const before = downloadEvents;
+        await page.locator('#convert').click();
+        await page.locator('#download').waitFor({ state: 'visible', timeout: 120_000 });
+        await page.waitForFunction(() => !document.getElementById('convert').disabled);
+        assert.equal(downloadEvents, before, 'the six-page conversion must not automatically download');
+        assert.match(await page.locator('#status').textContent(), /^Готово\. Страниц: 6\./);
+        const links = page.locator('#file-downloads a');
+        assert.equal(await links.count(), 6);
+        for (let i = 0; i < 6; i++) {
+          const pending = page.waitForEvent('download');
+          await links.nth(i).click();
+          const download = await pending;
+          assert.equal(await download.failure(), null);
+          assert.equal(download.suggestedFilename(), `six-a4_page_${String(i + 1).padStart(3, '0')}.tiff`);
+          const destination = path.join(output, download.suggestedFilename());
+          await download.saveAs(destination);
+          const bytes = new Uint8Array(await readFile(destination));
+          const directories = tiffDirectories(bytes);
+          assert.equal(directories.length, 1);
+          checkA4PackBitsPage(bytes, directories[0]);
+          report.downloads.push({ test: phase, path: path.relative(repo, destination), name: download.suggestedFilename(), bytes: bytes.byteLength });
+        }
+      } else {
+        const bytes = await convertAndSave(`six-a4-${mode}`);
+        if (mode === 'zip') {
+          const files = unzipSync(bytes);
+          const names = Object.keys(files).sort();
+          assert.equal(names.length, 6);
+          for (const [i, name] of names.entries()) {
+            assert.equal(name, `six-a4_page_${String(i + 1).padStart(3, '0')}.tiff`);
+            const directories = tiffDirectories(files[name]);
+            assert.equal(directories.length, 1);
+            checkA4PackBitsPage(files[name], directories[0]);
+          }
+        } else {
+          const directories = tiffDirectories(bytes);
+          assert.equal(directories.length, 6);
+          for (const [index, tags] of directories.entries()) {
+            assert.deepEqual(tags[297], [index, 6]);
+            checkA4PackBitsPage(bytes, tags);
+          }
+        }
+      }
+    });
+  }
+
+  await test('oversized-single-page-is-rejected-before-raster-allocation', async () => {
+    const hugePage = pdfObjects([
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 5000 5000] /Resources << >> /Contents 4 0 R >>',
+      stream('0 0 0 rg 20 20 30 30 re f\n'),
+    ]);
+    await selectPdf({ name: 'oversized-page.pdf', mimeType: 'application/pdf', buffer: hugePage });
+    await settings({ dpi: '400', color: 'bw', compression: 'packbits' });
+    await page.locator('#convert').click();
+    await page.waitForFunction(() => !document.getElementById('convert').disabled && document.getElementById('feedback').classList.contains('error'));
+    assert.match(await page.locator('#status').textContent(), /Страница 1/);
+    assert.match(await page.locator('#status').textContent(), /DPI/);
+    assert.ok(await page.locator('#download').isHidden());
+    assert.ok(await page.locator('#result-created').isHidden());
+    assert.equal(await page.locator('#file-downloads a').count(), 0);
   });
 
   await test('invalid-pdf', async () => {
