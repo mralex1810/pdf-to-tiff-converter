@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      stress_100_pages:
+        description: 'Test the released HTML on 100 A4 pages at 400 DPI (BW, PackBits, ZIP)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,6 +45,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'HTML build failed' }
           npm --prefix web run test:browser
           if ($LASTEXITCODE -ne 0) { throw 'Offline Edge conversion failed' }
+      - name: Stress test released HTML on 100 pages in Edge
+        if: github.event_name == 'workflow_dispatch' && inputs.stress_100_pages
+        shell: pwsh
+        env:
+          PDF_TO_TIFF_BROWSER: msedge
+          PDF_TO_TIFF_HTML: artifacts/html/PdfToTiff-v0.2.4-stress.html
+        run: |
+          Invoke-WebRequest -Uri 'https://github.com/mralex1810/pdf-to-tiff-converter/releases/download/v0.2.4/PdfToTiff.html' -OutFile $env:PDF_TO_TIFF_HTML
+          $expected = '7efc58bb7290dc1b5498b6da3006b6b1e6707499c59559e36994f8df35de2eb5'
+          if ((Get-FileHash $env:PDF_TO_TIFF_HTML -Algorithm SHA256).Hash -ne $expected) { throw 'Released HTML checksum mismatch.' }
+          node web/test/stress-100.mjs
+          if ($LASTEXITCODE -ne 0) { throw '100-page released HTML conversion failed.' }
+          $zip = Get-ChildItem artifacts/stress-100/*_tiff.zip | Select-Object -First 1
+          if (-not $zip) { throw 'Stress-test ZIP was not downloaded.' }
+          python web/test/verify-stress-100.py $zip.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Independent 100-page TIFF verification failed.' }
       - name: Core tests and real WPF UI conversion
         shell: pwsh
         run: ./scripts/test-windows.ps1
@@ -170,6 +191,7 @@ jobs:
           path: |
             artifacts/html/
             artifacts/html-tests/
+            artifacts/stress-100/
             artifacts/PdfToTiff-win-x64.zip
             artifacts/PdfToTiff-win-x64.zip.sha256
             artifacts/ui-smoke.png
